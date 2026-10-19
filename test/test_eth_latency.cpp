@@ -171,7 +171,7 @@ TEST_CASE("eth latency: --eth-latency durations")
 	CHECK(err.find("--eth-latency") != std::string::npos);
 }
 
-TEST_CASE("eth latency: the scsi factory wraps the backend (default 2 ms) only when given a clock")
+TEST_CASE("eth latency: the scsi factory wraps the backend (default 10 ms) only when given a clock")
 {
 	ScsiTargetOptions o;
 	o.eth = "none";
@@ -184,17 +184,17 @@ TEST_CASE("eth latency: the scsi factory wraps the backend (default 2 ms) only w
 	auto t = CreateScsiTarget("daynaport", 4, o);
 	auto *lat = dynamic_cast<EthLatency *>(&dynamic_cast<DaynaPortTarget *>(t.get())->backend());
 	REQUIRE(lat);
-	CHECK(lat->latency() == 2); // 2 ms at 1000 units/s
+	CHECK(lat->latency() == 10); // 10 ms at 1000 units/s
 
 	o.ethLatency = "0";
 	auto off = CreateScsiTarget("daynaport", 4, o);
 	CHECK(dynamic_cast<EthLatency *>(&dynamic_cast<DaynaPortTarget *>(off.get())->backend()) == nullptr);
 
-	o.ethLatency = "10ms";
-	auto ten = CreateScsiTarget("daynaport", 4, o);
-	CHECK(dynamic_cast<EthLatency *>(&dynamic_cast<DaynaPortTarget *>(ten.get())->backend())->latency() == 10);
+	o.ethLatency = "25ms";
+	auto more = CreateScsiTarget("daynaport", 4, o);
+	CHECK(dynamic_cast<EthLatency *>(&dynamic_cast<DaynaPortTarget *>(more.get())->backend())->latency() == 25);
 
 	o.ethLatency = "bogus"; // warns and falls back to the default
 	auto bad = CreateScsiTarget("daynaport", 4, o);
-	CHECK(dynamic_cast<EthLatency *>(&dynamic_cast<DaynaPortTarget *>(bad.get())->backend())->latency() == 2);
+	CHECK(dynamic_cast<EthLatency *>(&dynamic_cast<DaynaPortTarget *>(bad.get())->backend())->latency() == 10);
 }

@@ -235,7 +235,7 @@ maxivmac --model=MacPlus --shared ~/Desktop/shared MacPlus.mac
 | `--scsiN=TYPE` | Attach a SCSI target at ID N (0-6): `daynaport[,multiframe]` or `none` (compact Macs; refused on the Mac II family) |
 | `--eth=SPEC` | Ethernet backend for the DaynaPORT: `slirp[,hostfwd=tcp:[HOSTIP]:HOSTPORT-GUESTIP:GUESTPORT]` `hub:HOST:PORT` (join an [ethhub](docs/features/ETHHUB.md) LAN over UDP) or `none`. Default `slirp`, but `none` (cable out) with `--headless` or `--dbg-script` so scripted runs stay repeatable; forwards listen on 127.0.0.1 unless HOSTIP is given |
 | `--eth-mac=MAC` | DaynaPORT MAC address (default `02:6d:78:76:6d:01`; random `02:6d:78:xx:xx:xx` on a hub) |
-| `--eth-latency=D` | Minimum delay of received frames on the emulated clock: `2ms` (default), `500us`, `1s`, `0` = off. Needed because slirp answers before the guest's send has returned (MacTCP Ping) |
+| `--eth-latency=D` | Minimum delay of received frames on the emulated clock: `10ms` (default), `500us`, `1s`, `0` = off. Needed because slirp answers before the guest's send has returned (MacTCP Ping) |
 | `--debugger` | Start paused at first instruction with `(dbg)` prompt |
 | `--dbg-script=FILE` | Load and execute a `.dbg` script at startup (repeatable) |
 | `--record=PATH` | Record a golden file for non-regression testing |

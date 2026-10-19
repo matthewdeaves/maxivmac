@@ -6,8 +6,8 @@
 	reply is already queued before the guest's WRITE has even finished.  A real
 	LAN never answers within microseconds, and MacTCP (Ping, at least) loses the
 	reply when it arrives before the send call has returned: echo #2 and later
-	"time out" although every reply was delivered.  Holding frames for ~2 ms of
-	guest time makes the order of events what the guest software expects.
+	"time out" although every reply was delivered.  Holding frames for some ms of
+	guest time (default 10 ms, measured: see NETWORKING_DAYNAPORT.md) makes the order of events what the guest software expects.
 
 	The clock is injected (the scheduler's cycle counter in the emulator, a fake
 	in tests), so the behaviour is deterministic for a given emulated run; it is

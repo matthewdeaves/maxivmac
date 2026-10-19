@@ -71,7 +71,12 @@ std::unique_ptr<scsi::ScsiTarget> CreateScsiTarget(const std::string &typeSpec, 
 				fprintf(stderr, "[SCSI] ID %d: %s; using %s\n", id, err.c_str(), kDefaultEthLatency);
 				parseEthLatency(kDefaultEthLatency, opt.clockUnitsPerSecond, lat, err);
 			}
-			if (lat) eth = std::make_unique<EthLatency>(std::move(eth), opt.clock, lat);
+			if (lat)
+			{
+				fprintf(stderr, "[SCSI] ID %d: received frames held for %s of emulated time (--eth-latency)\n", id,
+						opt.ethLatency.empty() ? kDefaultEthLatency : opt.ethLatency.c_str());
+				eth = std::make_unique<EthLatency>(std::move(eth), opt.clock, lat);
+			}
 		}
 		fprintf(stderr, "[SCSI] ID %d: DaynaPORT SCSI/Link, MAC %02x:%02x:%02x:%02x:%02x:%02x, backend %s\n", id,
 				mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], eth->name());

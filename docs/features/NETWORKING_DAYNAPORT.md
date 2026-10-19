@@ -21,7 +21,7 @@ maxivmac --model=MacPlus --scsi4=daynaport \
 | `--eth=slirp[,hostfwd=...]` | Backend. `slirp` is user-mode NAT; `hub:HOST:PORT` joins an ethhub virtual LAN (below); `none` is a cable that is out. **Default:** `slirp` in an interactive run (when built with libslirp), `none` with `--headless` or `--dbg-script`. libslirp runs on the host clock and real sockets, so a live link would make scripted runs non-deterministic; give `--eth=slirp` explicitly to get one there (a note is printed when the default applies). |
 | `hostfwd=tcp:[HOSTIP]:HOSTPORT-GUESTIP:GUESTPORT` | Host-to-guest forward, TCP or `udp`; `GUESTIP` may be empty (= 10.0.2.15). `HOSTIP` is the host address to listen on, a dotted quad; **empty means 127.0.0.1**, so the forward is reachable from this machine only. `0.0.0.0` (or an interface address) exposes it to the network and prints a warning. Repeatable. |
 | `--eth-mac=xx:xx:xx:xx:xx:xx` | Adapter MAC. Default `02:6d:78:76:6d:01` (locally administered); with `--eth=hub:` the default is a random `02:6d:78:xx:xx:xx`, printed at start. A guest can override it with the driver's set-MAC command. |
-| `--eth-latency=DURATION` | Minimum delay before a received frame is visible to the guest, measured on the **emulated** clock. Default `2ms`; `500us`, `1s` (at most one second); `0` or `off` disables. A unit is required. See "Receive latency" below. |
+| `--eth-latency=DURATION` | Minimum delay before a received frame is visible to the guest, measured on the **emulated** clock. Default `10ms`; `500us`, `1s` (at most one second); `0` or `off` disables. A unit is required. See "Receive latency" below. |
 | `--net-redir=tcp:HOST:GUESTIP:GUEST` | Older form of host forward (loopback only, no host address). Applies to `--eth=slirp` and to `--serial-a=slip`. `--slip-redir` is kept as an alias. |
 | `--diag=scsi` | Trace every CDB, data record and status the target sees. |
 
@@ -162,7 +162,7 @@ maxivmac --scsi4=daynaport --eth=hub:127.0.0.1:5555 disk2.hfs     # another inst
   ctest `eth_hub_ethhub`, which starts the real `ethhub` and runs three
   `EthHub` backends through broadcast, unicast and unknown-unicast flooding
   (`test/eth_hub_it.cpp`, driver `test/eth_hub_it.py`; needs `MAXIVMAC_ETHHUB`).
-- `--eth-latency` applies to hub frames too (default 2 ms of emulated time).
+- `--eth-latency` applies to hub frames too (default 10 ms of emulated time).
   Frames are collected once per emulated tick, so a hub frame reaches the
   guest up to one tick (1/60 s) after it arrives at the socket.
 
@@ -170,7 +170,7 @@ maxivmac --scsi4=daynaport --eth=hub:127.0.0.1:5555 disk2.hfs     # another inst
 
 libslirp answers an ICMP echo or an ARP request inside `send()`, so the reply
 was already queued before the guest's WRITE had returned, and the very next
-READ delivered it. MacTCP Ping loses a reply that arrives that early: echo #2
+READ (2 to 4 ms of emulated time later) delivered it. MacTCP Ping loses a reply that arrives that early: echo #2
 and later were logged as timeouts although every reply reached the guest
 (observed with System 6.0.8, MacTCP 2.0.6, MacTCP Ping 2.0.2; the first echo
 survives only because it goes out from MacTCP's deferred queue after the ARP
@@ -189,8 +189,21 @@ Backends stay simple (they know nothing about it); the factory
 latency is not zero. Unit tests: `test/test_eth_latency.cpp` (fake clock,
 `FakeEthernet`, and a DaynaPORT READ after a WRITE).
 
+**How the default was chosen.** The first guess, 2 ms, did not help: the
+guest's next READ already comes 2.2 to 4.2 ms after the WRITE (measured on the
+emulated clock), so a 2 ms hold changed nothing. With the full MacTCP flow of
+`test/net/run-ping.sh` (5 echoes to 10.0.2.2, scored 5 out / 5 in):
+
+| `--eth-latency` | 0 / 2 ms | 4 ms | 6 ms | 8 ms | 10 ms | 14 ms | 20 ms | 100 ms | 300 ms |
+|---|---|---|---|---|---|---|---|---|---|
+| result | 1 of 5 | fail (6 requests) | 5/5 | 5/5 | 5/5 | 5/5 | 5/5 | 5/5 | 5/5 |
+
+The reply has to arrive more than about 4 ms after the send; 10 ms leaves a
+margin and is still far below any timeout MacTCP uses. Why MacTCP Ping needs
+that long was not investigated in the guest.
+
 A latency also adds to real round-trip times (a ping through slirp shows
-about 2 ms more than the host path), which is harmless for the 1 s resolution
+about 10 ms more than the host path), which is harmless for the 1 s resolution
 of the classic TCP/IP tools.
 
 ## Limits

@@ -30,7 +30,7 @@ struct ScsiTargetOptions
 };
 
 // Minimum delay on received frames when --eth-latency is not given.
-inline constexpr const char *kDefaultEthLatency = "2ms";
+inline constexpr const char *kDefaultEthLatency = "10ms";
 
 // `type` is "daynaport[,multiframe]"; "" and "none" give nullptr.  Unknown
 // types warn on stderr and give nullptr; unknown options warn and are ignored.

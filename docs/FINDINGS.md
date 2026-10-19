@@ -256,9 +256,11 @@ the branch that found them.
   polls in the trace). The cause inside MacTCP / Ping was not found; a hold-off
   proved the race.
 - **Status:** fixed in the emulator: received frames are held for a minimum
-  time on the emulated clock (`--eth-latency`, default 2 ms; `EthLatency`).
-  See `docs/features/NETWORKING_DAYNAPORT.md`. Whether 2 ms is enough for
-  other MacTCP clients is not known; `--eth-latency=` raises it.
+  time on the emulated clock (`--eth-latency`, default 10 ms; `EthLatency`).
+  The first guess of 2 ms was not enough: the guest's next READ comes 2-4 ms
+  after the WRITE, and the full MacTCP flow only passed from 6 ms up (table in
+  `docs/features/NETWORKING_DAYNAPORT.md`). Whether 10 ms is enough for other
+  MacTCP clients is not known; `--eth-latency=` raises it.
 
 ### F23. `--eth=hub:HOST:PORT` (EthHub backend)
 

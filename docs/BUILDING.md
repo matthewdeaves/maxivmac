@@ -79,7 +79,7 @@ directory.  If `traps.def` cannot be found the emulator prints a warning
 | `--scsiN=TYPE` | SCSI target at ID N (0-6): `daynaport[,multiframe]`, `none` (not on the Mac II family) |
 | `--eth=SPEC` | DaynaPORT Ethernet backend: `slirp[,hostfwd=tcp:[HOSTIP]:HOSTPORT-GUESTIP:GUESTPORT]`, `hub:HOST:PORT` (ethhub LAN), `none`. Default `slirp`; `none` with `--headless`/`--dbg-script` (give `--eth=slirp` for a live link there). Forwards listen on 127.0.0.1 unless HOSTIP is given |
 | `--eth-mac=MAC` | DaynaPORT MAC address (random on a hub unless given) |
-| `--eth-latency=D` | Minimum delay of received frames on the emulated clock (default `2ms`, `0` = off) |
+| `--eth-latency=D` | Minimum delay of received frames on the emulated clock (default `10ms`, `0` = off) |
 | `--debugger` | Start with debugger prompt (paused at first instruction) |
 | `--dbg-script=FILE` | Execute `.dbg` script at debugger startup (repeatable) |
 | `--debugserver[=PATH]` | Start debug server on Unix socket |

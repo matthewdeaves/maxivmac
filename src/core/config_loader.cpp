@@ -183,7 +183,7 @@ void PrintUsage(const char *progname)
 			"  --eth-mac=MAC    DaynaPORT MAC address (default 02:6d:78:76:6d:01; a random\n"
 			"                   02:6d:78:xx:xx:xx on a hub, so emulators sharing one do not collide)\n"
 			"  --eth-latency=D  Minimum delay of received frames on the emulated clock\n"
-			"                   (default 2ms; e.g. 500us, 1s; 0 = off)\n"
+			"                   (default 10ms; e.g. 500us, 1s; 0 = off)\n"
 			"  --net-redir=SPEC Port forward for slirp (SLIP or --eth): tcp:hostport:guestip:guestport\n"
 			"                   (--slip-redir is an alias)\n"
 			"  --shared=PATH    Mount host directory as shared drive (repeatable)\n"
