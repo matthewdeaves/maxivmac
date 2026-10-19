@@ -17,7 +17,7 @@ MacTCP setup).
 export MAXIVMAC_ROM=extras/roms/vMac.ROM            # Mac Plus ROM (not in the image)
 export E2E_DISK=$PWD/e2e-guest.hfs                  # from test/e2e/make-disk.sh
 export PEERTALK_DIR=~/peertalk CLOG_DIR=~/clog      # read-only inputs
-export BOMBERTALK_DIR=~/bombertalk                  # optional, R4 and R5
+export BOMBERTALK_DIR=~/bombertalk                  # optional, R4, R5 and R6
 test/e2e/run.sh r1 r2 r3                            # default; also r2b, r3b, r4, r5
 ```
 
@@ -129,7 +129,7 @@ is routed.
 | `MAXIVMAC_ROM` | Mac Plus ROM (default `data/roms/MacPlus.ROM`, else `extras/roms/vMac.ROM`) |
 | `E2E_DISK` | the guest disk (below) |
 | `PEERTALK_DIR`, `CLOG_DIR` | PeerTalk and clog sources, **read-only** (nothing in them is modified) |
-| `BOMBERTALK_DIR` | optional, BomberTalk sources (R4, R5) |
+| `BOMBERTALK_DIR` | optional, BomberTalk sources (R4, R5, R6) |
 | `PEERTALK_DIR_OLD` | optional second PeerTalk (e.g. an older commit via `git archive`), built as `/opt/peers/old`; use with `E2E_PEER=old` |
 | `E2E_OUT`, `E2E_IMAGE`, `E2E_REPEAT`, `E2E_CPUS`, `E2E_MEMORY`, `E2E_PIDS`, `E2E_TIMEOUT`, `E2E_EXPECT_FAIL` | see the header of `run.sh` |
 | `E2E_PEER`, `E2E_SPEED` | `old` selects the pre-fix POSIX peer; `E2E_SPEED` is the emulator's `--speed` |
@@ -181,6 +181,7 @@ broadcast received over the hub), `peer.log`, `emulator.out`, `run.dbg`,
 | R3b | 10.88.0.20/8 | 10.0.2.15/8 | the pair as first specified (below): ranks agree under both readings |
 | R4 | 10.88.0.20/24, BomberTalk 68k | 10.88.0.10/24, BomberTalk SDL build | each side logs `Lobby entered`, `Peer discovered: .. (<other ip>)` and `Connected to:`, one TCP connection |
 | R5 | as R4 | as R4 | R4, then a game (below): `TX game start` on the guest, `Game start received` on the POSIX side, both `LOBBY -> GAME` and `Game started: 2 players`, each side's bomb arrives at the other, the POSIX build logs the guest's moves, the guest's screenshots show both sprites on the move, nobody dies, still one TCP connection |
+| R6 | as R4 | as R4 | R5's start, then the POSIX player (lowest rank, so the game-over authority) drops a bomb on its own tile and stays in the blast: the POSIX build logs `Game over! Winner: 1`, `Game over authority: sending MSG_GAME_OVER`, the guest logs `Game over non-authority: starting failsafe timer` then `Game over (remote): winner=1`, both log the grace period, `Grace period complete, disconnecting`, `Screen transition: GAME -> LOBBY` and a second `Lobby entered`; neither the failsafe nor the timeout warning fires; at least one TCP connection (both reconnect in the lobby) |
 
 ### R5: a game, not only a lobby
 
@@ -328,5 +329,6 @@ the disk with hfsutils), screenshots.
   there for the tap.
 - R4 asserts discovery and connection (logs, one TCP connection) and a human
   looks at the Mac lobby screenshot; it does not start a game: that is R5.
+- R6 plays one round to its end, but only in one direction (the POSIX side is killed, the guest is the non-authority); the case where the guest is killed is not covered.
 - R5 plays a few seconds of one game (moves and one bomb each); it does not play
   to a result, join in progress, or test more than two players.
