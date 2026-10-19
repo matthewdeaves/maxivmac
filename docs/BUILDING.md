@@ -137,6 +137,11 @@ cmake --build bld
 | `MAXIVMAC_COVERAGE` | `OFF` | Clang source-based coverage instrumentation (use `macos-coverage` preset) |
 | `MAXIVMAC_SANITIZE` | `OFF` | AddressSanitizer + UBSan (use `macos-asan` preset) |
 
+## Static analysis
+
+`tools/static-analysis.sh` (clang-tidy, cppcheck, shellcheck, ruff, lizard against a
+ratcheted baseline); see [STATIC_ANALYSIS.md](STATIC_ANALYSIS.md).
+
 ## Building the INIT (macOS guest code)
 
 `build-init.sh` compiles the classic Mac INIT that runs inside the emulated guest OS. It stamps the current git version into `macsrc/init/version.h`, then launches the emulator to drive THINK C 5.0 via a `.dbg` automation script.

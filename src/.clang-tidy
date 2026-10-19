@@ -1,0 +1,6 @@
+# src/.clang-tidy  (inherits the root file; clang-tidy picks the nearest one per source file)
+InheritParentConfig: true
+Checks: 'cert-err33-c'
+CheckOptions:
+  # Only the calls whose failure is a real bug here: partial writes, lost data, silent socket errors.
+  - { key: cert-err33-c.CheckedFunctions, value: '::fwrite;::fread;::fclose;::fflush;::fseek;::remove;::rename;::send;::sendto;::recv;::recvfrom;::setsockopt;::bind;::listen;::connect;::accept' }

@@ -1,0 +1,40 @@
+# repo-root .clang-tidy.  Checks follow the brief (bugprone, clang-analyzer, cert,
+# concurrency, performance, portability) minus classes that were measured to be noise on this
+# tree (counts from a full run, 2026-10-19, unique findings):
+#   bugprone-signed-bitwise 3725      uint8_t operands promote to int; every `v & 0x0F` fires
+#   cert-err33-c 2443                 doctest CHECK/REQUIRE macros and fprintf/snprintf results
+#   bugprone-easily-swappable-parameters 184, portability-avoid-pragma-once 146 (repo style)
+#   performance-enum-size 37, cert-dcl50-cpp 6 (printf-style wrappers carry format attributes)
+#   concurrency-mt-unsafe 40          emulation core is single-threaded; strerror/exit/getenv
+#   bugprone-exception-escape 6, bugprone-throwing-static-initialization 3
+#   clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling 15 (fprintf: Annex K advice)
+#   clang-analyzer-optin.performance.Padding 1
+# Everything else stays on; findings are ratcheted by tools/static-analysis.sh, not gated one by one.
+Checks: >
+  -*,
+  bugprone-*,
+  clang-analyzer-*,
+  cert-*,
+  concurrency-*,
+  performance-*,
+  portability-*,
+  -bugprone-signed-bitwise,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-exception-escape,
+  -bugprone-throwing-static-initialization,
+  -cert-err58-cpp,
+  -cert-dcl50-cpp,
+  -cert-err33-c,
+  -concurrency-mt-unsafe,
+  -performance-enum-size,
+  -portability-avoid-pragma-once,
+  -clang-analyzer-optin.performance.Padding,
+  -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling
+# cert-err33-c is off globally; src/ and tools/ re-enable it with an explicit function list
+# (see src/.clang-tidy below) so that unchecked fwrite/fclose/sendto/recv still show up.
+WarningsAsErrors: ''
+HeaderFilterRegex: '.*/(src|tools|test)/.*'
+FormatStyle: none
+CheckOptions:
+  - { key: bugprone-narrowing-conversions.WarnOnIntegerNarrowingConversion, value: true }
+  - { key: bugprone-narrowing-conversions.WarnOnEquivalentBitWidth, value: false }

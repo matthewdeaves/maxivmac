@@ -1,0 +1,3 @@
+# test/.clang-tidy: doctest macros expand into unchecked calls and optional access.
+InheritParentConfig: true
+Checks: '-bugprone-unchecked-optional-access,-bugprone-unused-return-value,-bugprone-implicit-widening-of-multiplication-result,-bugprone-narrowing-conversions,-clang-analyzer-unix.StdCLibraryFunctions,-performance-unnecessary-value-param,-performance-use-std-move'

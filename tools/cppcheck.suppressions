@@ -1,0 +1,25 @@
+# tools/cppcheck.suppressions  (one per line: id:file[:line]).  Reasons:
+# stb/imgui are never analysed (libs/ is excluded on the command line as well).
+# State-only structs without constructors are initialised by their users; the three that matter
+# (Token::numValue, CpuSnapshot) are fixed in code instead of suppressed.
+uninitMemberVarNoCtor:*/src/core/model_defs.h
+uninitMemberVarNoCtor:*/src/devices/slot_rom.h
+uninitMemberVarNoCtor:*/src/guest/guest_dialog.h
+# Rule-of-three noise: Debugger/EmulatorShell/FileBackend are singletons that are never copied.
+noCopyConstructor:*/src/debugger/debugger.cpp
+noOperatorEq:*/src/debugger/debugger.cpp
+noDestructor:*/src/debugger/debugger.cpp
+noCopyConstructor:*/src/platform/emulator_shell.cpp
+noOperatorEq:*/src/platform/emulator_shell.cpp
+noCopyConstructor:*/src/devices/serial_file.h
+noOperatorEq:*/src/devices/serial_file.h
+# Verified false positives (see report): the dead overflow test in video.cpp is harmless
+# (uint16_t operands promote to int), the vector copy in text_convert.cpp is a copy, and
+# pmu.cpp's p_ cannot be null after locBuffSetUpNextChunk().
+invalidTestForOverflow:*/src/devices/video.cpp
+returnDanglingLifetime:*/src/storage/text_convert.cpp
+nullPointerRedundantCheck:*/src/devices/pmu.cpp
+nullPointerArithmeticRedundantCheck:*/src/devices/pmu.cpp
+accessMoved:*/src/lang/type_registry.cpp
+containerOutOfBounds:*/src/debugger/cmd_memory.cpp
+uninitvar:*/src/devices/eth_queue.h

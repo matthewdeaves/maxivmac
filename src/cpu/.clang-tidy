@@ -1,0 +1,5 @@
+# src/cpu/.clang-tidy: the 68k core is generated-style, derived from Mini vMac 37.03 and
+# checked bit-for-bit by golden files.  Mechanical style findings are noise there; the
+# analyzer/UB findings (null-pointer arithmetic, shifts) stay on.
+InheritParentConfig: true
+Checks: '-bugprone-narrowing-conversions,-bugprone-signed-char-misuse,-cert-str34-c,-bugprone-branch-clone,-bugprone-switch-missing-default-case,-bugprone-unhandled-code-paths,-bugprone-implicit-widening-of-multiplication-result,-bugprone-macro-parentheses,-performance-no-int-to-ptr'
