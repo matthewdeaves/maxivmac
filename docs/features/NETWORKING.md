@@ -1,5 +1,10 @@
 # Networking — Get a Classic Mac on the Internet
 
+> **Also available:** a DaynaPORT SCSI Ethernet adapter (`--scsi4=daynaport
+> --eth=slirp`) for EtherTalk and MacTCP over Ethernet; see
+> [NETWORKING_DAYNAPORT.md](NETWORKING_DAYNAPORT.md). This document covers the
+> SLIP serial route.
+
 ## Goal
 
 Enable the emulated Macintosh to reach the internet (HTTP, FTP, Telnet, etc.)

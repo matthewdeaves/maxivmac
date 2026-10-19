@@ -65,7 +65,10 @@ ROM auto-detection searches `./`, `roms/`, and `--romdir` for `<MODEL>.ROM`.
 | `--shared=PATH` | Mount host directory as shared drive (repeatable) |
 | `--serial-a=MODE` | Modem port backend: `loopback`, `file:tx=PATH[,rx=PATH]`, `pty`, `slip` |
 | `--serial-b=MODE` | Printer port backend (same modes as `--serial-a`) |
-| `--slip-redir=SPEC` | Port forward: `tcp:hostport:guestip:guestport` |
+| `--net-redir=SPEC` | Port forward for slirp: `tcp:hostport:guestip:guestport` (`--slip-redir` is an alias) |
+| `--scsiN=TYPE` | SCSI target at ID N (0-6): `daynaport`, `none` |
+| `--eth=SPEC` | DaynaPORT Ethernet backend: `slirp[,hostfwd=tcp::HOSTPORT-GUESTIP:GUESTPORT]`, `none` |
+| `--eth-mac=MAC` | DaynaPORT MAC address |
 | `--debugger` | Start with debugger prompt (paused at first instruction) |
 | `--dbg-script=FILE` | Execute `.dbg` script at debugger startup (repeatable) |
 | `--debugserver[=PATH]` | Start debug server on Unix socket |
@@ -90,7 +93,7 @@ ROM auto-detection searches `./`, `roms/`, and `--romdir` for `<MODEL>.ROM`.
 - **Windows:** MinGW or MSVC
 
 Optional:
-- **libslirp** — enables TCP/IP networking via `--slip-redir` (auto-detected at configure time)
+- **libslirp** — enables TCP/IP networking via `--net-redir` (auto-detected at configure time)
 
 ## Build Presets
 

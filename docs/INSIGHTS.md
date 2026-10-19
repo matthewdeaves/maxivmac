@@ -74,12 +74,12 @@ Model not specified at startup → selector UI → SetLaunchConfig() → Rig cre
 ./maxivmac --model=MacSE --shared=/path/to/host/dir disk.img
 ./maxivmac --headless --verify=golden.bin   # non-regression testing
 ./maxivmac --debugger --dbg-script=foo.dbg disk.img
-./maxivmac --serial-a=slip --slip-redir=tcp:8080:10.0.2.15:80 disk.img
+./maxivmac --serial-a=slip --net-redir=tcp:8080:10.0.2.15:80 disk.img
 ./maxivmac -h   # show help
 ```
 
 Key flags: `--model`, `--rom`, `--romdir`, `--ram`, `--screen`, `--speed`, `--scale`,
-`--fullscreen`, `--headless`, `--silent`, `--shared`, `--serial-a/b`, `--slip-redir`,
+`--fullscreen`, `--headless`, `--silent`, `--shared`, `--serial-a/b`, `--net-redir`, `--scsiN`, `--eth`,
 `--debugger`, `--dbg-script`, `--debugserver`, `--trace-traps`, `--diag`,
 `--record`, `--verify`, `--trace`, `--trace-cpu`.
 
