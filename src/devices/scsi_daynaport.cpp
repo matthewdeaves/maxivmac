@@ -129,7 +129,7 @@ scsi::Step DaynaPortTarget::handle(uint8_t lun)
 	switch (cdb_[0])
 	{
 		case kTestUnitReady:
-			if (!eth_->linkUp()) return error(kNotReady);
+			// Present means ready; link state is not a SCSI condition.
 			return done();
 		case kRequestSense:
 			// Dayna's zero-allocation REQUEST SENSE returns nine bytes.
@@ -157,7 +157,7 @@ scsi::Step DaynaPortTarget::handle(uint8_t lun)
 			// or still queued), so the driver knows to keep reading.
 			const size_t room = std::min(size, buf_.size());
 			size_t total = 0, last = 0;
-			while (enabled_)
+			while (enabled_ && eth_->linkUp())
 			{
 				if (total && !opt_.multiFrame) break;
 				const size_t pk = eth_->peekSize();
@@ -243,7 +243,9 @@ scsi::Step DaynaPortTarget::dataOutDone()
 			writeHeader_ = false;
 			return dataOut(n);
 		}
-		if (!eth_->send(std::span<const uint8_t>(buf_.data(), length_))) return error(kHardwareError);
+		// Cable unplugged: the frame goes nowhere, as on real hardware.
+		if (eth_->linkUp() && !eth_->send(std::span<const uint8_t>(buf_.data(), length_)))
+			return error(kHardwareError);
 		if (cdb_[5] == 0x80)
 		{
 			writeHeader_ = true;
