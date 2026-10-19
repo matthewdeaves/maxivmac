@@ -297,7 +297,8 @@ if(PkgConfig_FOUND)
     pkg_check_modules(SLIRP IMPORTED_TARGET slirp)
 endif()
 if(SLIRP_FOUND)
-    target_sources(maxivmac PRIVATE src/devices/slirp_stack.cpp src/devices/serial_slirp.cpp)
+    target_sources(maxivmac PRIVATE src/devices/slirp_stack.cpp src/devices/serial_slirp.cpp
+        src/devices/eth_slirp.cpp)
     target_link_libraries(maxivmac PRIVATE PkgConfig::SLIRP)
     target_compile_definitions(maxivmac PRIVATE "HAVE_SLIRP=1")
     message(STATUS "Networking: enabled (libslirp ${SLIRP_VERSION})")
@@ -424,4 +425,13 @@ target_compile_options(tests PRIVATE -Wall -Wextra -Werror -UNDEBUG)
 set_source_files_properties(test/test_stb_image_impl.cpp PROPERTIES
     COMPILE_FLAGS "-Wno-error"
 )
+if(SLIRP_FOUND)
+    # EthSlirp is tested against libslirp itself (offline exchanges only).
+    target_sources(tests PRIVATE
+        src/devices/slirp_stack.cpp
+        src/devices/eth_slirp.cpp
+        test/test_eth_slirp.cpp)
+    target_link_libraries(tests PRIVATE PkgConfig::SLIRP)
+    target_compile_definitions(tests PRIVATE "HAVE_SLIRP=1")
+endif()
 add_test(NAME tests COMMAND tests WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
