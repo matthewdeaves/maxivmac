@@ -9,8 +9,8 @@
 #if HAVE_SLIRP
 
 #include "devices/serial_backend.h"
+#include "devices/slirp_stack.h"
 #include "devices/slip.h"
-#include <libslirp.h>
 #include <memory>
 #include <queue>
 #include <string>
@@ -34,21 +34,12 @@ public:
 	/* Add a host->guest port forward.  Call after construction. */
 	bool addHostFwd(bool isUDP, uint16_t hostPort, const char *guestIP, uint16_t guestPort);
 
-	/* poll fd tracking for slirp_pollfds_fill_socket / poll / get_revents */
-	struct PollEntry
-	{
-		int fd;
-		int events;
-		int revents;
-	};
-
 private:
 	void handleArp(const uint8_t *frame, size_t len);
 
-	Slirp *slirp_ = nullptr;
+	SlirpStack stack_;
 	slip::Decoder decoder_;			/* guest TX: decode SLIP -> IP */
 	std::queue<uint8_t> txToGuest_; /* guest RX: SLIP-encoded queue */
-	std::vector<PollEntry> pollFds_;
 };
 
 #endif /* HAVE_SLIRP */
