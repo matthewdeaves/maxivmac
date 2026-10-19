@@ -209,4 +209,15 @@ TEST_CASE("eth slirp: a host forward listens on loopback by default, not on ever
 	CHECK_FALSE(portInUse(port, other));
 }
 
+TEST_CASE("eth slirp: a second stack asking for the same host port is refused")
+{
+	// Two DaynaPORTs each get their own slirp; the same forward must fail
+	// cleanly on the second one (the factory reports it) instead of silently
+	// sharing or stealing the port.
+	EthSlirp first, second;
+	const uint16_t port = freePort();
+	REQUIRE(first.addHostFwd(false, port, "", 80));
+	CHECK_FALSE(second.addHostFwd(false, port, "", 80));
+}
+
 #endif // HAVE_SLIRP
