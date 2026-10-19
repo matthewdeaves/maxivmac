@@ -95,6 +95,9 @@ public:
 	bool sharesLan() const override { return true; }
 	const char *name() const override { return "hub"; }
 
+	// Thread contract: the counters are owned by the emulation thread (the one calling send() and
+	// poll()), which is also the only one that may read them; `hellos` and `keyHint` are atomic
+	// snapshots because the keepalive thread bumps them.
 	const Stats &stats() const;
 	// Local UDP port of the socket (0 if closed); the hub sees this as the client.
 	uint16_t localPort() const;
@@ -107,6 +110,7 @@ private:
 	void checkKeyHint();
 	void keepaliveLoop();
 	void startKeepalive();
+	bool hubIsTalking();
 
 	int fd_ = -1;
 	// sockaddr_in of the hub, kept opaque here (see the .cpp).

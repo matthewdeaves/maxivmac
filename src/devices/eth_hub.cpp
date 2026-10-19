@@ -9,6 +9,7 @@
 #include <cerrno>
 #include <algorithm>
 #include <charconv>
+#include <system_error>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -143,7 +144,32 @@ const EthHub::Stats &EthHub::stats() const
 
 void EthHub::startKeepalive()
 {
-	if (!opt_.wallMs && opt_.keepaliveMs > 0) kaThread_ = std::thread([this] { keepaliveLoop(); });
+	if (opt_.wallMs || opt_.keepaliveMs <= 0) return;
+	try
+	{
+		kaThread_ = std::thread([this] { keepaliveLoop(); });
+	}
+	catch (const std::system_error &e)
+	{
+		// No thread: keepalives ride poll() as with an injected clock (not while paused).
+		fprintf(stderr, "[ETH] hub: cannot start the keepalive thread (%s); hellos will follow the emulation tick\n",
+				e.what());
+	}
+}
+
+// Has the hub said anything to us?  Looks at the first pending datagram without taking it, so a
+// paused emulation that never calls poll() still notices an answer; the frame stays queued.
+bool EthHub::hubIsTalking()
+{
+	if (ackSeen_) return true;
+	uint8_t b[1];
+	sockaddr_in from{};
+	socklen_t fl = sizeof from;
+	const ssize_t n = ::recvfrom(fd_, b, sizeof b, MSG_PEEK | MSG_DONTWAIT, reinterpret_cast<sockaddr *>(&from), &fl);
+	if (n < 0 || from.sin_addr.s_addr != peer_->addr.sin_addr.s_addr || from.sin_port != peer_->addr.sin_port)
+		return false;
+	ackSeen_ = true;
+	return true;
 }
 
 void EthHub::keepaliveLoop()
@@ -165,7 +191,7 @@ void EthHub::keepaliveLoop()
 // hub without a key and clocks more than --auth-window apart look like.
 void EthHub::checkKeyHint()
 {
-	if (opt_.key.empty() || ackSeen_ || hinted_ || now() - startMs_ < opt_.hintAfterMs) return;
+	if (opt_.key.empty() || ackSeen_ || hinted_ || now() - startMs_ < opt_.hintAfterMs || hubIsTalking()) return;
 	if (hinted_.exchange(true)) return;
 	fprintf(stderr, "[ETH] hub: keyed hellos sent for %lld s and the hub has not answered: check that it runs with the "
 					"same --key-file and that both clocks agree to within its --auth-window\n",

@@ -57,20 +57,30 @@ Status: the emulator joins a hub with `--eth=hub:HOST:PORT` (`EthHub` in
   - a MAC entry lives as long as its owner keeps talking (`--mac-timeout`
     counts from the newer of the entry's and the owner's last datagram), so a
     guest that is merely quiet does not lose its MAC while its keepalives go on;
-  - a full MAC table only gives up an entry whose owner is gone, or one that
-    belongs to the client that is learning, so source-MAC churn cannot push a
-    live client's entries out; if nothing may go the frame is dropped
+  - a full MAC table only gives up an entry whose owner is gone or quiet (no
+    datagram within `--live-window`; for a trunk's entry, the entry itself not
+    refreshed within it), one that belongs to the client that is learning, or,
+    for a trunk learning, another trunk's; so source-MAC churn cannot push a
+    live guest's entries out. If nothing may go the frame is dropped
     (`dropped_macfull`);
   - a client holds at most `--max-macs-per-client` entries (default 8; the next
-    one replaces its own least recently seen), so one client cannot fill the table;
-  - **trunks** (the TAP port, the `--connect` uplink, and any client listed with
-    `--trunk a.b.c.d[/n]` or `--trunk a.b.c.d:port`, i.e. a child hub that
-    joined you) carry a whole LAN: they are exempt from the MAC cap, the rate
-    limit and the flood cap, they may take a MAC from a guest (it moved to the
-    other side), and their MACs always count as live, so a quiet host stack
-    stays protected until `--mac-timeout`. A child hub that is *not* listed is
-    just one more client and is limited like one; list it. A hub loop is
-    unprotected by any of this, as before.
+    one replaces its own least recently seen, and the first time that happens
+    is logged), so one client cannot fill the table; a trunk may hold
+    `--max-macs-per-trunk` (default 512), so a macof on the TAP LAN cannot
+    either;
+  - **trunks** are the TAP port, the `--connect` uplink, and any client named
+    with `--trunk ip:port` (exactly that socket; no ranges, because the
+    exemption is granted by source address, which UDP cannot vouch for; refused
+    on a non-loopback listen without `--key-file`, warned about with one). They
+    carry a whole LAN, so they are exempt from the rate and flood limits and
+    have the larger MAC quota. They get **no** exemption from MAC pinning: a
+    trunk can take a MAC only from an owner that is gone or quiet, or from
+    another trunk, never from a live guest, or a hostile or spoofed trunk could
+    take a guest's MAC and lock it out. A trunk's own MACs count as protected
+    against takeover by guests until they age out (`--mac-timeout`, 300 s), so a
+    quiet host stack keeps its address. A child hub that is *not* named is just
+    one more client and is limited like one. A hub loop is unprotected by any of
+    this, as before.
 - **Rate limits**: per client a token bucket of `--rate FPS[,BPS]` (default
   10000 frames/s and 12.5 MB/s, i.e. 100 Mbit/s; burst a quarter of a second,
   at least 8 frames / one full frame); excess datagrams are dropped before
@@ -78,11 +88,14 @@ Status: the emulator joins a hub with `--eth=hub:HOST:PORT` (`EthHub` in
   `--flood-rate BPS` (default 2 MB/s) caps the egress bytes one client can
   cause by flooding (broadcast, multicast, unknown unicast; a frame costs
   length x copies, so one 1514-byte broadcast to 63 ports costs 95 KB), and the
-  hub as a whole has a bucket 4x as big, which is charged only for senders that
-  have already used more than half of their own budget, so a few heavy senders
-  can empty it but never stop a quiet client's ARP; a flood over budget is
-  dropped whole (`dropped_flood`). Trunks are not limited (see above). `--flood-rate 0` turns the flood cap off, `--no-rate`
-  turns off both. Known unicast is never charged as a flood.
+  hub as a whole has a bucket 4x as big that **every** flood is charged to, so
+  many clients each inside their own budget still cannot exceed it. When it is
+  dry, a sender that has used under half of its own budget may still send a
+  small flood (at most 8 KB of fan-out: an ARP, a name lookup) from a separate
+  reserve that heavy senders cannot touch (half a client's rate, shared); a
+  flood over budget is dropped whole (`dropped_flood`). Trunks are not limited.
+  `--flood-rate 0` turns the flood cap off, `--no-rate` turns off both. Known
+  unicast is never charged as a flood.
 - Counters are printed to stderr on SIGUSR1 and on exit (SIGINT/SIGTERM).
 - `--verbose` logs client joins/leaves and one line per frame.
 - `--pcap FILE` writes every frame the hub receives (ingress) as a standard
@@ -91,7 +104,10 @@ Status: the emulator joins a hub with `--eth=hub:HOST:PORT` (`EthHub` in
   one more port, so a local Linux IP stack is on the LAN. Needs `/dev/net/tun`
   and `NET_ADMIN`, i.e. a container.
 - `--connect host:port` joins another ethhub as a pinned client (hello every
-  5 s, never ages out). Used to chain hubs. There is no spanning tree: hubs
+  5 s, never ages out; a trunk). Used to chain hubs. With a keyed parent the
+  hello is keyed: with this hub's `--key-file`, or with `--connect-key FILE`
+  when this hub itself has no key (how an unkeyed hub, e.g. for QEMU
+  endpoints, joins a keyed one). There is no spanning tree: hubs
   must form a tree, never a loop.
 - `--listen [addr:]port` (default **`127.0.0.1:5555`**; port 0 = ephemeral,
   the chosen port is printed as `ethhub listening on N` on stdout, the bound
@@ -119,7 +135,8 @@ MAC taken over; use `--mac-move=allow` for those (QEMU cannot join a keyed
 hub at all). A hub chain by `--connect` must remain a tree (as before), then
 no MAC legitimately appears on two ports at once. One consequence: a guest
 that restarts on the *other* side of a trunk is blocked until its old entry
-ages out (`--mac-timeout`), because the trunk owner is always live.
+ages out (`--mac-timeout`, 300 s), because a trunk's entries are protected
+until then; `--mac-timeout` is the knob.
 
 ### Authentication (`--key-file`)
 
@@ -164,6 +181,14 @@ casual abuse, not a secure channel):
 
 - *No confidentiality or integrity*: frames travel in clear and are not
   authenticated per datagram. Anyone who can read the traffic sees the LAN.
+- *Replay from fresh source ports*: a sniffed hello is the same bytes for
+  everybody who sends one in that second, so it can be replayed from many new
+  source addresses; each would become a client. One hello (same timestamp and
+  tag, remembered for the last 256 accepted) may create at most
+  `--max-per-hello` clients (default 16, enough for emulators started in the
+  same second; the extra are `dropped_replay`), and `--max-per-ip` and the
+  client table bound the rest. A sniffer who keeps capturing new hellos can still
+  join; that is the "can sniff" case below.
 - *Replay*: a captured hello is valid for `--auth-window` (60 s) from any
   *other* source address (the tag does not cover the address because NAT and
   Docker hide the client's real one), and the client that replay creates
@@ -182,14 +207,23 @@ casual abuse, not a secure channel):
 
 Use `--allow` as well, and a VPN/SSH tunnel or a trusted LAN when any of that
 matters. The key is never passed on a command line (it is a file for that
-reason). The hub and the emulator open it without blocking, require a regular
-file owned by the running user with no group/other permission bits, warn about
-a key that is one repeated byte, and wipe their copies of the secret (the HMAC
-pads are derived once at start and the key buffer is zeroed at once). **QEMU
+reason). The hub and the emulator apply the same rules: open without blocking;
+a regular file **owned by the user running the program** (in a container that
+runs ethhub as root, as `ETHHUB_USER=root` does, the file must be root's; a
+bind-mounted file owned by someone else is refused, not read) with no
+group/other permission bits; at most 1024 bytes plus a CR LF, trailing CR/LF
+stripped, 16 bytes minimum, nothing silently cut off; a warning for a key that
+is one repeated byte; and the copies of the secret are wiped (the hub derives
+the HMAC pads once and zeroes the key buffer at once, the trimmed bytes
+included). **QEMU
 cannot join a keyed hub at all**: it cannot send the keyed hello, and an
 `--allow` rule does not help because the keyed hub drops everything from an
-address that has not sent one. Put a QEMU endpoint on an unkeyed hub (with
-`--allow`) and connect that hub to the keyed one with `--connect`/`--trunk`.
+address that has not sent one. The way in is an unkeyed hub U for the QEMU
+endpoints (with `--allow`, on loopback or a trusted segment) that joins the keyed
+hub K: `ethhub --connect K:5555 --connect-key FILE` (U sends K a keyed hello with
+that key; K sends U frames as to any client). K lists U with `--trunk U:port` if
+U carries many MACs or a lot of traffic; U's endpoints are then as exposed as
+U is. Tested in `test_ethhub.py` (`test_unkeyed_hub_reaches_keyed_hub_with_connect_key`).
 
 ### Security
 

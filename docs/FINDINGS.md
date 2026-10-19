@@ -730,3 +730,37 @@ An independent review of F43 to F46 found these; all fixed, each with tests in
   client; at most 4096 entries); the HMAC cost of a flood of fake keyed hellos
   is not limited.
 
+### F48. ethhub second review: trunks were a hole
+
+A second review of F47 found that the trunk exemptions undid the pinning.
+Fixed, with tests:
+
+- A trunk could take any MAC (F1) and evict any entry (F2), and trunk-owned
+  entries were unevictable for `--mac-timeout`: a macof on the TAP LAN took
+  guests' MACs, filled the table, and locked the guests out. Now a trunk takes a
+  MAC only from a dead or quiet owner or another trunk, evicts only dead/quiet
+  or trunk entries or its own, and has a finite quota (`--max-macs-per-trunk`,
+  512). Against eviction a trunk's entry is protected only while refreshed
+  within `--live-window`; against takeover by guests it stays protected until
+  `--mac-timeout` (kept, so a quiet host stack keeps its address).
+- `--trunk` is `ip:port` only (CIDR and port-less forms are rejected) and is
+  refused on a non-loopback listen without `--key-file` (warned about with one),
+  because the grant is by forgeable source address.
+- The hub-wide flood bucket is charged for every flood again (many steady
+  flooders could bypass it); quiet senders draw small floods from a separate
+  reserve.
+- The documented QEMU workaround did not work. `--connect-key FILE` lets an
+  unkeyed hub send the keyed hello to a keyed parent; tested.
+- A sniffed hello replayed from fresh source ports: one hello may create at most
+  `--max-per-hello` clients (16), remembered for the last 256 hellos.
+- The first time a client hits `--max-macs-per-client` is logged. Docs now state
+  the root-in-container key-owner rule and the 300 s trunk pin.
+- Key loader: hub and emulator now share the length rules (no silent
+  truncation, trimmed bytes wiped). The emulator survives a failing
+  `std::thread` (falls back to poll-driven hellos with a warning) and notices an
+  answer from the hub by peeking at the socket, so a paused emulation no longer
+  prints a false key hint. `stats()` thread contract documented.
+- **Not done / unverified:** the hub's per-IP scan; a sniffer who keeps
+  capturing and replaying newer hellos is out of scope (documented); the thread
+  fallback has no test (it needs a failing `pthread_create`).
+

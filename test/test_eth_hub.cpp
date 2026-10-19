@@ -485,4 +485,35 @@ TEST_CASE("eth hub: keyed hellos that are never answered produce one hint; an an
 		CHECK_FALSE(h->stats().keyHint);
 	}
 }
+
+TEST_CASE("eth hub auth: key length rules match the hub (CR LF allowed after 1024 bytes, nothing cut off)")
+{
+	std::string k1024;
+	for (int i = 0; i < 1024; i++) k1024 += char('!' + (i * 7) % 90);
+	std::vector<uint8_t> key;
+	std::string err;
+	const std::string a = writeKey(k1024 + "\r\n", 0600, "len_ok");
+	CHECK(loadHubKey(a, key, err));
+	CHECK(key.size() == 1024);
+	const std::string b = writeKey(k1024 + "z", 0600, "len_1025");
+	CHECK_FALSE(loadHubKey(b, key, err));
+	const std::string c = writeKey(k1024 + "zz\n", 0600, "len_junk");
+	CHECK_FALSE(loadHubKey(c, key, err));
+	for (const auto &p : {a, b, c}) ::unlink(p.c_str());
+}
+
+TEST_CASE("eth hub: an answer that arrives while poll() is not being called still cancels the hint")
+{
+	FakeHub hub; // answers the first hello with an empty datagram; the emulation never polls
+	EthHub::Options o;
+	o.keepaliveMs = 20;
+	o.hintAfterMs = 150;
+	o.key = bytes("correct horse battery staple");
+	auto h = make(hub, o);
+	std::vector<uint8_t> d;
+	REQUIRE(hub.recv(d));
+	hub.sendTo(hub.lastFrom, {});
+	std::this_thread::sleep_for(std::chrono::milliseconds(400));
+	CHECK_FALSE(h->stats().keyHint);
+}
 #endif

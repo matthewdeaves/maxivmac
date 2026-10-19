@@ -84,6 +84,10 @@
 #define DEF_MAX_MACS_PER_CLIENT 8
 #define MAC_EVICT_SCAN 32 /* how far from the LRU end to look for an evictable MAC */
 #define DEF_HINT_AFTER 30
+#define DEF_MAX_MACS_PER_TRUNK 512 /* large, but a macof on the TAP LAN cannot fill the table */
+#define DEF_MAX_PER_HELLO 16       /* clients one keyed hello (same second, same tag) may create */
+#define HELLO_SEEN 256
+#define FLOOD_RESERVE_MAX_COST 8192 /* bytes a quiet sender may take from the reserve */
 #define HARD_MAX_CLIENTS 4096
 #define HARD_MAX_MACS 4096
 #define MAX_ALLOW 16
@@ -161,6 +165,8 @@ static int g_max_macs = DEF_MAX_MACS;
 static int g_max_per_ip = -1; /* -1: DEF_MAX_PER_IP, but loopback unlimited; 0 = unlimited; N = N for everyone */
 static int g_max_macs_per_client = DEF_MAX_MACS_PER_CLIENT; /* 0 = unlimited; TAP/uplink are exempt */
 static int g_hint_after = DEF_HINT_AFTER;
+static int g_max_macs_per_trunk = DEF_MAX_MACS_PER_TRUNK;
+static int g_max_per_hello = DEF_MAX_PER_HELLO;
 static int g_client_timeout = DEF_CLIENT_TIMEOUT;
 static int g_mac_timeout = DEF_MAC_TIMEOUT;
 static int g_live_window = DEF_LIVE_WINDOW;
@@ -169,7 +175,7 @@ static bool g_mac_move_allow; /* --mac-move=allow */
 static bool g_rate_on = true;
 static double g_rate_fps = DEF_RATE_FPS, g_rate_bps = DEF_RATE_BPS, g_flood_bps = DEF_FLOOD_BPS;
 static double g_burst_f, g_burst_b, g_burst_flood; /* derived by rate_setup() */
-static Bucket g_gflood;
+static Bucket g_gflood, g_reserve; /* hub-wide flood bucket and the small reserve for quiet senders */
 static int g_opt_flood = DEF_FLOOD_BPS; /* --flood-rate, bytes/s */
 
 static size_t g_key_len; /* 0 = no authentication */
@@ -267,7 +273,12 @@ typedef struct {
     size_t fill;
 } Sha256;
 
-static Sha256 g_hin, g_hout; /* HMAC state after the key pads, set once by hmac_key_setup() */
+typedef struct {
+    Sha256 in, out;
+} HmacKey; /* HMAC state after the key pads: the key itself is not kept */
+
+static HmacKey g_hkey, g_upkey; /* the hub's key; the key for --connect hellos (--connect-key) */
+static bool g_have_upkey;
 
 static const uint32_t K256[64] = {
     0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
@@ -371,7 +382,7 @@ static void secure_zero(void *p, size_t n)
 }
 
 /* Absorb the HMAC key pads once; per hello only the message is hashed. */
-static void hmac_key_setup(const uint8_t *key, size_t klen)
+static void hmac_key_setup(HmacKey *hk, const uint8_t *key, size_t klen)
 {
     uint8_t k[64] = {0}, pad[64];
     if (klen > 64) {
@@ -385,41 +396,42 @@ static void hmac_key_setup(const uint8_t *key, size_t klen)
     }
     for (int i = 0; i < 64; i++)
         pad[i] = k[i] ^ 0x36;
-    sha256_init(&g_hin);
-    sha256_update(&g_hin, pad, 64);
+    sha256_init(&hk->in);
+    sha256_update(&hk->in, pad, 64);
     for (int i = 0; i < 64; i++)
         pad[i] = k[i] ^ 0x5c;
-    sha256_init(&g_hout);
-    sha256_update(&g_hout, pad, 64);
+    sha256_init(&hk->out);
+    sha256_update(&hk->out, pad, 64);
     secure_zero(k, sizeof k);
     secure_zero(pad, sizeof pad);
 }
 
-static void hmac_fast(const uint8_t *msg, size_t mlen, uint8_t out[32])
+static void hmac_fast(const HmacKey *hk, const uint8_t *msg, size_t mlen, uint8_t out[32])
 {
     uint8_t inner[32];
-    Sha256 s = g_hin;
+    Sha256 s = hk->in;
     sha256_update(&s, msg, mlen);
     sha256_final(&s, inner);
-    s = g_hout;
+    s = hk->out;
     sha256_update(&s, inner, 32);
     sha256_final(&s, out);
     secure_zero(inner, sizeof inner);
+    secure_zero(&s, sizeof s);
 }
 
 /* ---- authentication (keyed hello) ------------------------------------------ */
 
-static void auth_tag(const uint8_t hdr[5], uint8_t tag[AUTH_TAG_LEN])
+static void auth_tag(const HmacKey *hk, const uint8_t hdr[5], uint8_t tag[AUTH_TAG_LEN])
 {
     uint8_t msg[sizeof AUTH_CTX - 1 + 5], full[32];
     memcpy(msg, AUTH_CTX, sizeof AUTH_CTX - 1);
     memcpy(msg + sizeof AUTH_CTX - 1, hdr, 5);
-    hmac_fast(msg, sizeof msg, full);
+    hmac_fast(hk, msg, sizeof msg, full);
     memcpy(tag, full, AUTH_TAG_LEN);
     secure_zero(full, sizeof full);
 }
 
-static void auth_hello_make(uint8_t out[AUTH_HELLO_LEN])
+static void auth_hello_make(const HmacKey *hk, uint8_t out[AUTH_HELLO_LEN])
 {
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
@@ -429,7 +441,7 @@ static void auth_hello_make(uint8_t out[AUTH_HELLO_LEN])
     out[2] = (uint8_t)(t >> 16);
     out[3] = (uint8_t)(t >> 8);
     out[4] = (uint8_t)t;
-    auth_tag(out, out + 5);
+    auth_tag(hk, out, out + 5);
 }
 
 static bool auth_hello_ok(const uint8_t *p)
@@ -441,7 +453,7 @@ static bool auth_hello_ok(const uint8_t *p)
     if (d < -g_auth_window || d > g_auth_window)
         return false;
     uint8_t tag[AUTH_TAG_LEN];
-    auth_tag(p, tag);
+    auth_tag(&g_hkey, p, tag);
     uint8_t diff = 0;
     for (int i = 0; i < AUTH_TAG_LEN; i++)
         diff |= (uint8_t)(tag[i] ^ p[5 + i]);
@@ -455,10 +467,32 @@ static bool is_auth_hello_shape(const uint8_t *p, ssize_t n)
 
 /* The key file must be private to its owner (like an ssh key) and owned by the
  * user running the hub: the secret is all there is, so refuse to run with one
- * that others can read or write.  Opened non-blocking so a FIFO cannot hang us. */
-static int load_key(const char *path)
+ * that others can read or write.  Opened non-blocking so a FIFO cannot hang us.
+ * Rules shared with the emulator (eth_hub_auth.cpp): at most KEY_MAX + 2 bytes in
+ * the file (a CR LF may follow the key), trailing CR/LF stripped, KEY_MIN..KEY_MAX
+ * bytes left, nothing silently cut off. */
+static int key_check_file(int fd, const char *path, struct stat *st)
 {
-    uint8_t buf[KEY_MAX + 1];
+    if (fstat(fd, st) != 0 || !S_ISREG(st->st_mode))
+        fprintf(stderr, "--key-file %s: not a regular file\n", path);
+    else if (st->st_uid != geteuid())
+        fprintf(stderr,
+                "--key-file %s: owned by uid %u, not by the user running ethhub (uid %u); in a container run "
+                "ethhub as the file's owner\n",
+                path, (unsigned)st->st_uid, (unsigned)geteuid());
+    else if (st->st_mode & 077)
+        fprintf(stderr, "--key-file %s: permissions %04o are too open (group/other can access it); chmod 600\n",
+                path, (unsigned)(st->st_mode & 0777));
+    else if (st->st_size > KEY_MAX + 2)
+        fprintf(stderr, "--key-file %s: longer than %d bytes\n", path, KEY_MAX);
+    else
+        return 0;
+    return -1;
+}
+
+static int load_key(const char *path, HmacKey *dst, size_t *len_out)
+{
+    uint8_t buf[KEY_MAX + 3];
     int rc = -1;
     int fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
     if (fd < 0) {
@@ -466,15 +500,7 @@ static int load_key(const char *path)
         return -1;
     }
     struct stat st;
-    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode))
-        fprintf(stderr, "--key-file %s: not a regular file\n", path);
-    else if (st.st_uid != geteuid())
-        fprintf(stderr, "--key-file %s: owned by uid %u, not by the user running ethhub (uid %u)\n", path,
-                (unsigned)st.st_uid, (unsigned)geteuid());
-    else if (st.st_mode & 077)
-        fprintf(stderr, "--key-file %s: permissions %04o are too open (group/other can access it); chmod 600\n",
-                path, (unsigned)(st.st_mode & 0777));
-    else {
+    if (key_check_file(fd, path, &st) == 0) {
         ssize_t n = read(fd, buf, sizeof buf);
         size_t len = n < 0 ? 0 : (size_t)n;
         while (len > 0 && (buf[len - 1] == '\n' || buf[len - 1] == '\r'))
@@ -489,13 +515,13 @@ static int load_key(const char *path)
             if (memcmp(buf, buf + 1, len - 1) == 0)
                 fprintf(stderr, "ethhub: WARNING: --key-file %s is the same byte repeated: anyone can guess it\n",
                         path);
-            hmac_key_setup(buf, len);
-            g_key_len = len;
+            hmac_key_setup(dst, buf, len);
+            *len_out = len;
             rc = 0;
         }
     }
     close(fd);
-    secure_zero(buf, sizeof buf);
+    secure_zero(buf, sizeof buf); /* the whole buffer: the key and whatever was trimmed */
     return rc;
 }
 
@@ -611,6 +637,7 @@ static void rate_setup(void)
     g_burst_b = g_rate_bps / 4 < FRAME_MAX ? FRAME_MAX : g_rate_bps / 4;
     g_burst_flood = g_flood_bps / 2 < FRAME_MAX ? FRAME_MAX : g_flood_bps / 2;
     bucket_init(&g_gflood, g_burst_flood * GLOBAL_FLOOD_MULT, now_ns());
+    bucket_init(&g_reserve, g_burst_flood / 2, now_ns());
 }
 
 /* ---- MAC table ------------------------------------------------------------- */
@@ -651,27 +678,39 @@ static void mac_attach(int i, int client)
     c->nmacs++;
 }
 
-/* Is the owner of a MAC still there?  A client is live while it keeps talking to
- * the hub (any datagram, a keepalive hello included; with a key, a keyed hello)
- * within --live-window.  The TAP and the uplink are trunks: a quiet host stack
- * or a quiet remote hub is still there, so they always count as live and their
- * entries only go away with --mac-timeout. */
-static bool owner_live(int owner, time_t now)
+/* Two notions of "still there".  Against a *takeover* (move_live) a client is live
+ * while it keeps talking to the hub within --live-window (any datagram, a keepalive
+ * hello included; with a key, a keyed hello); a trunk (TAP, uplink, --trunk) is
+ * a quiet host stack or remote hub that is still there, so it counts as live until
+ * its entry ages out (--mac-timeout).  Against *table pressure* (evict_live) a
+ * trunk's entry is only protected while the entry itself was refreshed within
+ * --live-window, otherwise a macof on the TAP LAN would fill the table with
+ * entries nobody can evict. */
+static bool move_live(int owner, time_t now)
 {
     const Client *o = &g_clients[owner];
     return o->used && (is_trunk(o) || now - o->last_seen < g_live_window);
 }
 
-/* A full table gives up a MAC only if its owner is gone, or it is the claimant's
- * own, or the claimant is a trunk.  Otherwise a client sending many source MACs
- * could push a live client's entries out and then take them.  Looks a bounded
- * distance from the LRU end; -1 = nothing may go. */
+static bool evict_live(int m, time_t now)
+{
+    const Client *o = &g_clients[g_macs[m].client];
+    if (!o->used)
+        return false;
+    return now - (is_trunk(o) ? g_macs[m].last_seen : o->last_seen) < g_live_window;
+}
+
+/* A full table gives up a MAC only if its owner is gone or quiet, or it is the
+ * claimant's own, or both claimant and owner are trunks.  Otherwise a client (or a
+ * trunk) sending many source MACs could push a live client's entries out and then
+ * take them.  Looks a bounded distance from the LRU end; -1 = nothing may go. */
 static int mac_victim(int claimant, time_t now)
 {
     int steps = 0;
+    bool ctrunk = is_trunk(&g_clients[claimant]);
     for (int m = g_mlist.tail; m >= 0 && steps < MAC_EVICT_SCAN; m = g_mlru[m].prev, steps++) {
         int ow = g_macs[m].client;
-        if (is_trunk(&g_clients[claimant]) || ow == claimant || !owner_live(ow, now))
+        if (ow == claimant || !evict_live(m, now) || (ctrunk && is_trunk(&g_clients[ow])))
             return m;
     }
     return -1;
@@ -689,12 +728,24 @@ static int mac_alloc(int client, time_t now)
     return g_mfree[--g_nmfree];
 }
 
-/* A client (not a trunk) holds at most --max-macs-per-client entries; the next
- * one replaces its own least recently seen. */
+/* A client holds at most --max-macs-per-client entries and a trunk at most
+ * --max-macs-per-trunk; the next one replaces its own least recently seen.  The
+ * first time a client hits its cap is logged. */
 static void mac_make_room_for(int client)
 {
     Client *c = &g_clients[client];
-    if (!is_trunk(c) && g_max_macs_per_client > 0 && c->nmacs >= g_max_macs_per_client) {
+    bool trunk = is_trunk(c);
+    int cap = trunk ? g_max_macs_per_trunk : g_max_macs_per_client;
+    static bool logged;
+    if (cap > 0 && c->nmacs >= cap) {
+        if (!logged && !trunk) {
+            char s[64];
+            logged = true;
+            fmt_client(c, s, sizeof s);
+            fprintf(stderr,
+                    "ethhub: %s reached --max-macs-per-client %d: it now replaces its oldest MAC (logged once)\n", s,
+                    cap);
+        }
         mac_release(c->mlist.tail);
         g_st.macs_evicted++;
     }
@@ -737,20 +788,23 @@ static bool mac_learn(const uint8_t *mac, int client, time_t now)
     return true;
 }
 
-/* A MAC learned on a live client cannot move to another client (see owner_live()).
+/* A MAC learned on a live client cannot move to another client (see move_live()).
  * A guest that restarts on a new UDP port is locked out for at most the live
  * window after its old process stopped; an attacker is locked out for as long as
- * the owner is up.  A trunk (TAP, uplink) may always take a MAC: it is the way
- * back to a guest that moved to the other side. */
+ * the owner is up.  A trunk gets no exemption from that: it may take a MAC from a
+ * dead owner or from another trunk, never from a live guest, or a spoofed or
+ * hostile trunk could take a guest's MAC and lock the guest out. */
 static bool mac_move_denied(const uint8_t *src, int from, time_t now)
 {
-    if (g_mac_move_allow || (src[0] & 1) || is_trunk(&g_clients[from]))
+    if (g_mac_move_allow || (src[0] & 1))
         return false;
     int m = mac_find(src);
     if (m < 0)
         return false;
     int owner = g_macs[m].client;
-    return owner != from && owner_live(owner, now);
+    if (owner == from || (is_trunk(&g_clients[from]) && is_trunk(&g_clients[owner])))
+        return false;
+    return move_live(owner, now);
 }
 
 /* ---- client table ---------------------------------------------------------- */
@@ -979,14 +1033,19 @@ static bool flood_admit(int from, size_t len, int copies)
     Bucket own = g_clients[from].flood;
     if (!bucket_take(&own, g_flood_bps, g_burst_flood, cc, t))
         return false;
-    /* The hub-wide bucket is only charged to senders that have used more than
-     * half of their own budget, so heavy senders can run it dry but a quiet
-     * client's ARP or name lookup is never refused because of them. */
-    if (own.tok < g_burst_flood / 2) {
-        Bucket glob = g_gflood;
-        if (!bucket_take(&glob, g_flood_bps * GLOBAL_FLOOD_MULT, g_burst_flood * GLOBAL_FLOOD_MULT, gc, t))
-            return false;
+    /* Every flood is charged to the hub-wide bucket, so many clients each inside
+     * their own budget still cannot exceed it.  When it is dry, a sender that has
+     * barely used its own budget may still send a small flood (an ARP, a name
+     * lookup) from a separate reserve that heavy senders cannot touch. */
+    Bucket glob = g_gflood;
+    if (bucket_take(&glob, g_flood_bps * GLOBAL_FLOOD_MULT, g_burst_flood * GLOBAL_FLOOD_MULT, gc, t)) {
         g_gflood = glob;
+    } else {
+        Bucket res = g_reserve;
+        if (own.tok < g_burst_flood / 2 || cost > FLOOD_RESERVE_MAX_COST ||
+            !bucket_take(&res, g_flood_bps / 2, g_burst_flood / 2, cost, t))
+            return false;
+        g_reserve = res;
     }
     g_clients[from].flood = own;
     return true;
@@ -1088,6 +1147,42 @@ static bool parse_cidr(const char *s, AllowNet *out)
     return true;
 }
 
+/* A sniffed keyed hello can be replayed from any number of fresh source ports,
+ * each of which would become a client.  Remember the hellos accepted recently
+ * (bounded: HELLO_SEEN slots, the oldest is replaced) and let one hello (same
+ * timestamp and tag, which is what emulators starting in the same second also
+ * send) create at most --max-per-hello clients. */
+typedef struct {
+    bool used;
+    uint32_t ts;
+    uint8_t tag[AUTH_TAG_LEN];
+    int n;
+} HelloSeen;
+
+static HelloSeen g_hseen[HELLO_SEEN];
+
+static bool hello_fanout_ok(uint32_t ts, const uint8_t *tag)
+{
+    int oldest = 0;
+    for (int i = 0; i < HELLO_SEEN; i++) {
+        HelloSeen *h = &g_hseen[i];
+        if (h->used && h->ts == ts && memcmp(h->tag, tag, AUTH_TAG_LEN) == 0) {
+            if (h->n >= g_max_per_hello)
+                return false;
+            h->n++;
+            return true;
+        }
+        if (!h->used || (g_hseen[oldest].used && (int32_t)(h->ts - g_hseen[oldest].ts) < 0))
+            oldest = i;
+    }
+    HelloSeen *h = &g_hseen[oldest];
+    h->used = true;
+    h->ts = ts;
+    memcpy(h->tag, tag, AUTH_TAG_LEN);
+    h->n = 1;
+    return true;
+}
+
 /* A keyed hello is the only thing that makes or refreshes a client on a keyed
  * hub.  It must carry a timestamp newer than the last one accepted from that
  * address, so replaying a captured hello cannot keep anybody alive, and it is
@@ -1102,6 +1197,10 @@ static int admit_keyed_hello(const struct sockaddr_in *from, const uint8_t *buf,
     uint32_t ts = (uint32_t)buf[1] << 24 | (uint32_t)buf[2] << 16 | (uint32_t)buf[3] << 8 | buf[4];
     int idx = client_find(from);
     if (idx >= 0 && g_clients[idx].has_ts && ts <= g_clients[idx].auth_ts) {
+        g_st.dropped_replay++;
+        return -3;
+    }
+    if (idx < 0 && !hello_fanout_ok(ts, buf + 5)) {
         g_st.dropped_replay++;
         return -3;
     }
@@ -1306,8 +1405,8 @@ static void uplink_hello(void)
         return;
     uint8_t h[AUTH_HELLO_LEN] = {0};
     size_t n = 0;
-    if (g_key_len) {
-        auth_hello_make(h);
+    if (g_have_upkey || g_key_len) { /* --connect-key, else the hub's own key */
+        auth_hello_make(g_have_upkey ? &g_upkey : &g_hkey, h);
         n = sizeof h;
     }
     (void)sendto(g_sock, h, n, 0, (const struct sockaddr *)&g_clients[g_uplink].addr,
@@ -1345,9 +1444,16 @@ static void usage(const char *p)
             "                         reflect traffic off the hub: say so explicitly, e.g.\n"
             "                         --listen 0.0.0.0:%d, and add --allow and --key-file\n"
             "  --allow CIDR           accept clients only from CIDR (a.b.c.d[/n]); repeatable\n"
-            "  --trunk ADDR           treat clients from a.b.c.d[/n] or a.b.c.d:port as trunks (another hub\n"
-            "                         that carries a LAN): no rate limit, any number of MACs, may take\n"
-            "                         MACs from guests; repeatable.  The TAP and --connect are always trunks\n"
+            "  --trunk ip:port        treat the client at exactly this address as a trunk (a child hub that\n"
+            "                         carries a LAN): no rate or flood limit, up to --max-macs-per-trunk\n"
+            "                         MACs; it still cannot take a live guest's MAC.  Repeatable.  The TAP\n"
+            "                         and --connect are always trunks.  Refused on a non-loopback listen\n"
+            "                         without --key-file (source addresses can be forged)\n"
+            "  --max-macs-per-trunk N MACs a trunk may hold (default %d)\n"
+            "  --max-per-hello N      clients one keyed hello may create (default %d; stops a sniffed hello\n"
+            "                         being replayed from many source ports)\n"
+            "  --connect-key FILE     key for the hello sent by --connect (default: --key-file); lets an\n"
+            "                         unkeyed hub join a keyed one\n"
             "  --key-file FILE        shared secret (%d..%d bytes, mode 0600): only addresses that\n"
             "                         sent a keyed hello may join; see docs/features/ETHHUB.md\n"
             "  --auth-window SEC      accepted clock difference of a keyed hello (default %d)\n"
@@ -1378,9 +1484,9 @@ static void usage(const char *p)
             "Wire format: one raw Ethernet frame (14..1514 bytes) per UDP datagram;\n"
             "empty datagram = hello/keepalive (13-byte keyed hello with --key-file).\n"
             "SIGUSR1 prints counters; SIGINT/SIGTERM prints them and exits.\n",
-            p, DEF_PORT, DEF_PORT, KEY_MIN, KEY_MAX, DEF_AUTH_WINDOW, DEF_CLIENT_TIMEOUT, DEF_MAC_TIMEOUT,
-            DEF_MAX_CLIENTS, HARD_MAX_CLIENTS, DEF_MAX_MACS, HARD_MAX_MACS, DEF_MAX_PER_IP, DEF_MAX_MACS_PER_CLIENT,
-            DEF_LIVE_WINDOW,
+            p, DEF_PORT, DEF_PORT, DEF_MAX_MACS_PER_TRUNK, DEF_MAX_PER_HELLO, KEY_MIN, KEY_MAX, DEF_AUTH_WINDOW,
+            DEF_CLIENT_TIMEOUT, DEF_MAC_TIMEOUT, DEF_MAX_CLIENTS, HARD_MAX_CLIENTS, DEF_MAX_MACS, HARD_MAX_MACS,
+            DEF_MAX_PER_IP, DEF_MAX_MACS_PER_CLIENT, DEF_LIVE_WINDOW,
             DEF_HINT_AFTER, DEF_RATE_FPS, DEF_RATE_BPS, DEF_FLOOD_BPS);
 }
 
@@ -1412,7 +1518,7 @@ static void parse_rate(const char *s)
 }
 
 typedef struct {
-    const char *listen_spec, *tap_name, *pcap_path, *connect_spec, *key_path;
+    const char *listen_spec, *tap_name, *pcap_path, *connect_spec, *key_path, *connect_key_path;
 } Opts;
 
 typedef struct {
@@ -1464,22 +1570,26 @@ static bool opt_table(int argc, char **argv, int *i, const IntOpt *io, size_t ni
     return false;
 }
 
-/* a.b.c.d[/n] (any port) or a.b.c.d:port (exactly that socket). */
+/* a.b.c.d:port, exactly that socket.  Never a range: the exemption is granted by
+ * source address, which UDP cannot vouch for, so it is kept as narrow as it gets. */
 static bool parse_trunk(const char *s, AllowNet *out)
 {
     const char *colon = strchr(s, ':');
     if (!colon)
-        return parse_cidr(s, out);
+        return false;
     char host[64];
     size_t hl = (size_t)(colon - s);
     char *e;
     long port = strtol(colon + 1, &e, 10);
-    if (hl == 0 || hl >= sizeof host || colon[1] == '\0' || *e != '\0' || port < 1 || port > 65535)
+    if (hl == 0 || hl >= sizeof host || colon[1] == '\0' || *e != '\0' || port < 1 || port > 65535 ||
+        strchr(s, '/') != NULL)
         return false;
     memcpy(host, s, hl);
     host[hl] = '\0';
     if (!parse_cidr(host, out))
         return false;
+    out->mask = 0xFFFFFFFFu;
+    out->net = ntohl(inet_addr(host));
     out->port = (uint16_t)port;
     return true;
 }
@@ -1508,7 +1618,7 @@ static bool opt_special(int argc, char **argv, int *i)
         g_nallow++;
     } else if (opt_val(argc, argv, i, "--trunk", &v)) {
         if (g_ntrunk >= MAX_ALLOW || !parse_trunk(v, &g_trunk[g_ntrunk])) {
-            fprintf(stderr, "bad --trunk %s (want a.b.c.d[/n] or a.b.c.d:port, at most %d)\n", v, MAX_ALLOW);
+            fprintf(stderr, "bad --trunk %s (want ip:port, e.g. 192.0.2.7:5556; at most %d)\n", v, MAX_ALLOW);
             exit(2);
         }
         g_ntrunk++;
@@ -1537,11 +1647,13 @@ static void parse_args(int argc, char **argv, Opts *o)
         {"--max-per-ip", &g_max_per_ip, 0, HARD_MAX_CLIENTS},
         {"--max-macs-per-client", &g_max_macs_per_client, 0, HARD_MAX_MACS},
         {"--hint-after", &g_hint_after, 1, 3600},
+        {"--max-macs-per-trunk", &g_max_macs_per_trunk, 1, HARD_MAX_MACS},
+        {"--max-per-hello", &g_max_per_hello, 1, HARD_MAX_CLIENTS},
         {"--flood-rate", &g_opt_flood, 0, 2000000000},
     };
     const StrOpt strs[] = {
         {"--listen", &o->listen_spec}, {"--tap", &o->tap_name},   {"--connect", &o->connect_spec},
-        {"--pcap", &o->pcap_path},     {"--key-file", &o->key_path},
+        {"--pcap", &o->pcap_path},     {"--key-file", &o->key_path}, {"--connect-key", &o->connect_key_path},
     };
     for (int i = 1; i < argc; i++) {
         if (opt_table(argc, argv, &i, ints, sizeof ints / sizeof ints[0], strs, sizeof strs / sizeof strs[0]))
@@ -1620,6 +1732,19 @@ static void tables_free(void)
     free(g_mbuck);
 }
 
+/* --trunk grants by source address, which anyone who can send UDP here can forge:
+ * on a hub reachable from other hosts that is refused unless a key is required
+ * (and then still warned about, see announce()). */
+static bool trunk_unsafe(const struct sockaddr_in *la)
+{
+    if (g_ntrunk == 0 || (ntohl(la->sin_addr.s_addr) >> 24) == 127 || g_key_len)
+        return false;
+    fprintf(stderr,
+            "ethhub: refusing --trunk on a non-loopback listen without --key-file: a trunk is recognised by its\n"
+            "ethhub: source address, which can be forged, and it is exempt from the rate limits\n");
+    return true;
+}
+
 static void announce(const struct sockaddr_in *la, const Opts *o)
 {
     char ip[INET_ADDRSTRLEN];
@@ -1627,6 +1752,10 @@ static void announce(const struct sockaddr_in *la, const Opts *o)
     fprintf(stderr, "ethhub: bound to %s:%u\n", ip, ntohs(la->sin_port));
     if (g_key_len)
         fprintf(stderr, "ethhub: authentication on (key file %s): unkeyed sources are dropped\n", o->key_path);
+    if (g_ntrunk && (ntohl(la->sin_addr.s_addr) >> 24) != 127)
+        fprintf(stderr,
+                "ethhub: WARNING: --trunk is on and the hub is not loopback: anyone who can forge the trunk's\n"
+                "ethhub: source address and has seen a keyed hello gets its rate-limit exemption\n");
     if ((ntohl(la->sin_addr.s_addr) >> 24) != 127)
         fprintf(stderr,
                 "ethhub: WARNING: %s is not loopback.  Anyone who can send UDP here %s the\n"
@@ -1742,7 +1871,15 @@ int main(int argc, char **argv)
     la.sin_port = htons(DEF_PORT);
     if (o.listen_spec && !parse_listen(o.listen_spec, &la))
         return 2;
-    if (o.key_path && load_key(o.key_path) < 0)
+    if (o.key_path && load_key(o.key_path, &g_hkey, &g_key_len) < 0)
+        return 2;
+    if (o.connect_key_path && (!o.connect_spec || load_key(o.connect_key_path, &g_upkey, &(size_t){0}) < 0)) {
+        if (!o.connect_spec)
+            fprintf(stderr, "--connect-key needs --connect\n");
+        return 2;
+    }
+    g_have_upkey = o.connect_key_path != NULL;
+    if (trunk_unsafe(&la))
         return 2;
 
     seed_init();
@@ -1774,8 +1911,8 @@ int main(int argc, char **argv)
     }
     serve(pf, npf, g_buf);
     print_stats(stderr);
-    secure_zero(&g_hin, sizeof g_hin);
-    secure_zero(&g_hout, sizeof g_hout);
+    secure_zero(&g_hkey, sizeof g_hkey);
+    secure_zero(&g_upkey, sizeof g_upkey);
     if (g_pcap)
         fclose(g_pcap);
     tables_free();

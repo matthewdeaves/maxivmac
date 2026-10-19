@@ -170,17 +170,29 @@ bool loadHubKey(const std::string &path, std::vector<uint8_t> &key, std::string 
 		::close(fd);
 		return false;
 	}
-	std::vector<uint8_t> buf(kHubKeyMax + 1);
+	if (st.st_size > off_t(kHubKeyMax) + 2) // the hub's rule: 1024 bytes and a CR LF
+	{
+		err = "hub key file '" + path + "' is longer than 1024 bytes";
+		::close(fd);
+		return false;
+	}
+	std::vector<uint8_t> buf(kHubKeyMax + 3);
 	const ssize_t n = ::read(fd, buf.data(), buf.size());
 	::close(fd);
-	if (n < 0 || size_t(n) > kHubKeyMax)
+	if (n < 0)
 	{
-		err = "hub key file '" + path + (n < 0 ? "' is unreadable" : "' is longer than 1024 bytes");
+		err = "hub key file '" + path + "' is unreadable";
 		secureZero(buf.data(), buf.size());
 		return false;
 	}
 	size_t len = size_t(n);
 	while (len > 0 && (buf[len - 1] == '\n' || buf[len - 1] == '\r')) len--;
+	if (len > kHubKeyMax)
+	{
+		err = "hub key file '" + path + "' is longer than 1024 bytes";
+		secureZero(buf.data(), buf.size());
+		return false;
+	}
 	if (len < kHubKeyMin)
 	{
 		err = "hub key in '" + path + "' is shorter than 16 bytes";
@@ -189,6 +201,7 @@ bool loadHubKey(const std::string &path, std::vector<uint8_t> &key, std::string 
 	}
 	if (std::all_of(buf.begin(), buf.begin() + len, [&](uint8_t c) { return c == buf[0]; }))
 		fprintf(stderr, "[ETH] WARNING: hub key in '%s' is one byte repeated: anyone can guess it\n", path.c_str());
+	secureZero(buf.data() + len, buf.size() - len); // the trimmed bytes
 	buf.resize(len);
 	key = std::move(buf);
 	return true;
