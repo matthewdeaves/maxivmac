@@ -424,7 +424,7 @@ static void dumpMismatch(FILE *out, uint32_t snapIdx, const CpuSnapshot &expecte
 void StateRecorder::cpuSlow(uint32_t instructionCount, uint32_t pc, uint16_t sr,
 							const uint32_t d[8], const uint32_t a[8])
 {
-	CpuSnapshot snap;
+	CpuSnapshot snap{}; /* the reserved field is written to the golden file: zero it, not stack garbage */
 	snap.instructionCount = static_cast<uint64_t>(instructionCount);
 	snap.pc = pc;
 	snap.sr = sr;
