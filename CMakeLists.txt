@@ -530,5 +530,11 @@ if(BASH_PROGRAM AND UNIX)
     add_test(NAME net_ping
         COMMAND "${BASH_PROGRAM}" "${CMAKE_SOURCE_DIR}/test/net/run-ping.sh" "$<TARGET_FILE:maxivmac>"
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
-    set_tests_properties(net_ping PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 900 LABELS "net")
+    set_tests_properties(net_ping PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 900 LABELS "net" RESOURCE_LOCK net_disk)
+    # The same flow on the Mac SE (ROM: data/roms/MacSE.ROM or $MAXIVMAC_ROM_SE; skipped without it).  It runs
+    # at real-time speed (FINDINGS F41), about 5 minutes.
+    add_test(NAME net_ping_se
+        COMMAND "${CMAKE_COMMAND}" -E env MODEL=MacSE "${BASH_PROGRAM}" "${CMAKE_SOURCE_DIR}/test/net/run-ping.sh" "$<TARGET_FILE:maxivmac>"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+    set_tests_properties(net_ping_se PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 1500 LABELS "net" RESOURCE_LOCK net_disk)
 endif()

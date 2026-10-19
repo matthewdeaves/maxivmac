@@ -12,6 +12,7 @@
 # Passes when the guest ran the whole script, the run saw five ICMP echo
 # replies (SCSI trace) and the Ping window shows 5 packets out and 5 in.
 #
+# MODEL=MacSE runs the same flow on the Mac SE (ROM: MAXIVMAC_ROM_SE; about 5 min).
 # MAXIVMAC_ARGS: extra emulator arguments (e.g. --eth-latency=0 for the control run).
 #
 # Exit: 0 pass, 1 fail, 77 skip (an input is missing; see lib.sh).
@@ -29,7 +30,8 @@ fi
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/maxivmac-ping.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
-export MAXIVMAC_OUT_DIR="${MAXIVMAC_OUT_DIR:-$CACHE/ping-out}"
+OUTSUF=""; [ "$MODEL" = MacPlus ] || OUTSUF="-$MODEL"
+export MAXIVMAC_OUT_DIR="${MAXIVMAC_OUT_DIR:-$CACHE/ping-out$OUTSUF}"
 mkdir -p "$MAXIVMAC_OUT_DIR"
 
 # The script is a list of `source` lines, one per block, so a failure message
@@ -39,13 +41,24 @@ mkdir -p "$MAXIVMAC_OUT_DIR"
 BLOCKS="boot chooser cpopen ether move restart cpopen mactcp-open mactcp-config mactcp-close restart launch ping"
 : > "$WORK/ping.dbg"
 for b in $BLOCKS; do
-    printf 'log "block: %s"\nsource "%s/scripts/ping/%s.inc"\n' "$b" "$NETDIR" "$b" >> "$WORK/ping.dbg"
+    # a model-specific block (scripts/ping/$MODEL/) replaces the common one
+    f="$NETDIR/scripts/ping/$b.inc"
+    [ -f "$NETDIR/scripts/ping/$MODEL/$b.inc" ] && f="$NETDIR/scripts/ping/$MODEL/$b.inc"
+    printf 'log "block: %s"\nsource "%s"\n' "$b" "$f" >> "$WORK/ping.dbg"
 done
 cp "$WORK/ping.dbg" "$MAXIVMAC_OUT_DIR/ping.dbg"
 
+# The SE needs real-time speed: AppleTalk calibrates a DBF loop against the
+# Time Manager, and the speed-up (VIA timers frozen while the CPU runs on)
+# makes the measured time 0 -> "divide by zero" (FINDINGS F41).
+SPEED=""
+if [ "$MODEL" != MacPlus ]; then
+    case " ${MAXIVMAC_ARGS:-} " in *" --speed="*) ;; *) SPEED="--speed=0" ;; esac
+fi
+
 cp "$NET_DISK" "$WORK/disk.hfs"
-"$EMU" --headless --silent --model=MacPlus --rom="$ROM" \
-    --scsi4=daynaport --eth=slirp --diag=scsi ${MAXIVMAC_ARGS:-} \
+"$EMU" --headless --silent --model=$MODEL --rom="$ROM" \
+    --scsi4=daynaport --eth=slirp --diag=scsi $SPEED ${MAXIVMAC_ARGS:-} \
     --dbg-script="$WORK/ping.dbg" "$WORK/disk.hfs" \
     > "$MAXIVMAC_OUT_DIR/ping.out" 2> "$MAXIVMAC_OUT_DIR/ping.err"
 rc=$?

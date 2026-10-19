@@ -6,7 +6,11 @@
 # SKIP_RETURN_CODE).
 #
 #   MAXIVMAC            emulator binary        (default: bld/macos/maxivmac)
+#   MODEL               emulated model: MacPlus (default) or MacSE
 #   MAXIVMAC_ROM        Mac Plus ROM           (default: data/roms/MacPlus.ROM)
+#   MAXIVMAC_ROM_SE     Mac SE ROM, for MODEL=MacSE (default: data/roms/MacSE.ROM)
+#   MAXIVMAC_PREP_ROM   Mac Plus ROM used to prepare the disk when MODEL is not
+#                       MacPlus  (default: data/roms/MacPlus.ROM)
 #   MAXIVMAC_BASE_DISK  bootable System 6.0.8 HFS image, the one the
 #                       golden tests use       (default: extras/disks/608.hfs)
 #   MAXIVMAC_DAYNA_INSTALLER  Dayna "DaynaPORT Installer" (the .sit, the NDIF
@@ -32,7 +36,12 @@ die() { echo "ERROR $*" >&2; exit 1; }
 
 [ -n "${MAXIVMAC_HFSUTILS:-}" ] && PATH="$MAXIVMAC_HFSUTILS:$PATH"
 EMU="${MAXIVMAC:-$REPO/bld/macos/maxivmac}"
-ROM="${MAXIVMAC_ROM:-$REPO/data/roms/MacPlus.ROM}"
+MODEL="${MODEL:-MacPlus}"
+case "$MODEL" in
+    MacPlus) ROM="${MAXIVMAC_ROM:-$REPO/data/roms/MacPlus.ROM}" ;;
+    MacSE)   ROM="${MAXIVMAC_ROM_SE:-$REPO/data/roms/MacSE.ROM}" ;;
+    *) echo "ERROR MODEL must be MacPlus or MacSE, not $MODEL" >&2; exit 1 ;;
+esac
 BASE_DISK="${MAXIVMAC_BASE_DISK:-$REPO/extras/disks/608.hfs}"
 CACHE="${MAXIVMAC_NET_CACHE:-${TMPDIR:-/tmp}/maxivmac-net}"
 NET_DISK="${MAXIVMAC_NET_DISK:-$CACHE/net-disk.hfs}"
@@ -43,7 +52,7 @@ need_file() { [ -f "$2" ] || skip "$1 not found${2:+: $2} (set \$$3)"; }
 # check_inputs_for_prep / check_inputs_for_ping: skip unless everything is there.
 check_common() {
     [ -x "$EMU" ] || die "emulator not found at $EMU (set MAXIVMAC)"
-    need_file "Mac Plus ROM" "$ROM" MAXIVMAC_ROM
+    need_file "$MODEL ROM" "$ROM" MAXIVMAC_ROM
     need_tool python3
 }
 check_prep() {

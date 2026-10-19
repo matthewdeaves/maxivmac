@@ -24,6 +24,10 @@
 set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 check_prep
+# The disk is always prepared on a Mac Plus (the installer script is written for
+# it); the prepared disk then runs on the Plus and the SE alike.
+if [ "$MODEL" = MacPlus ]; then PREP_ROM="$ROM"; else PREP_ROM="${MAXIVMAC_PREP_ROM:-$REPO/data/roms/MacPlus.ROM}"; fi
+[ -f "$PREP_ROM" ] || skip "Mac Plus ROM for preparing the disk not found: $PREP_ROM (set \$MAXIVMAC_PREP_ROM)"
 OUT="${1:-$NET_DISK}"
 mkdir -p "$CACHE" "$(dirname "$OUT")"
 W="$(mktemp -d "${TMPDIR:-/tmp}/maxivmac-prep.XXXXXX")"
@@ -69,7 +73,7 @@ cp "$BASE_DISK" "$W/disk.hfs"
 cp "$FLOPPY" "$W/dayna-floppy.hfs"
 export MAXIVMAC_OUT_DIR="${MAXIVMAC_OUT_DIR:-$CACHE/prep-out}"
 mkdir -p "$MAXIVMAC_OUT_DIR"
-"$EMU" --headless --silent --model=MacPlus --rom="$ROM" \
+"$EMU" --headless --silent --model=MacPlus --rom="$PREP_ROM" \
     --dbg-script="$NETDIR/scripts/dayna-install.dbg" "$W/disk.hfs" "$W/dayna-floppy.hfs" \
     > "$MAXIVMAC_OUT_DIR/dayna-install.log" 2>&1 || die "Dayna installer run failed (see $MAXIVMAC_OUT_DIR/dayna-install.log)"
 hmount "$W/disk.hfs" >/dev/null
