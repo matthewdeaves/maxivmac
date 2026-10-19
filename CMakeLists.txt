@@ -504,6 +504,7 @@ if(UNIX)
 else()
     target_compile_definitions(tests PRIVATE "HAVE_ETH_HUB=0")
 endif()
+target_compile_definitions(tests PRIVATE "MAXIVMAC_TEST_SOURCE_DIR=\"${CMAKE_SOURCE_DIR}\"")
 add_test(NAME tests COMMAND tests WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
 
 # End-to-end MacTCP ping over the emulated DaynaPORT (test/net, docs/features/

@@ -95,9 +95,9 @@ the branch that found them.
   fails 26 test cases (fixtures are looked up relative to the source tree);
   `ctest` passes because it sets `WORKING_DIRECTORY` to the source dir.
 - **Repro:** `cd <builddir> && ./tests`.
-- **Status:** open (harmless under ctest). Not resolved by the data-path fix
-  (S2), which covers `data/` definition files only; those cases
-  still look for test fixtures relative to the source tree.
+- **Status:** fixed: `test/test_main.cpp` changes to the source directory
+  (compile-time `MAXIVMAC_TEST_SOURCE_DIR`) before running, so `tests` gives
+  the same result from any directory (579 of 579 from the build dir and /tmp).
 
 ## 2026-10: found during feat/daynaport
 
