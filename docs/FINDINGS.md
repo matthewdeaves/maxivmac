@@ -555,3 +555,53 @@ commit on `fix/static-findings`.
   `fwrite`/`fclose`/`sendto`/`recv`; the CPU core is intentionally exempt from
   most style checks.
 
+
+## 2026-10: Mac SE DaynaPORT / MacTCP pass
+
+The Mac SE is the primary real-hardware target, so the DaynaPORT + MacTCP ping
+flow was run on `--model=MacSE` (`NETWORKING_TESTING.md`, `REAL_HARDWARE_SE.md`).
+The SCSI side needed nothing: the NCR5380 decode, the Dayna probe and the
+command mix are the same as on the Plus.
+
+### F41. AppleTalk start-up on the SE bombs ("divide by zero") at any speed above 1x
+
+- **Symptom:** on `--model=MacSE` with a DaynaPORT attached, Chooser > AppleTalk
+  Active (and every later AppleTalk start) shows "Sorry, a system error
+  occurred. divide by zero" with `--speed=1` or more (the headless default is
+  16x). `--speed=0` (1x) works. Without a DaynaPORT it does not happen. Not seen
+  on the Plus, where the routine below was never reached in the same flow.
+- **Cause (partly verified):** the faulting `DIVU D5,D1` is in AppleTalk's
+  loop-speed calibration: it primes a Time Manager task (`PrimeTime`, 60 s in
+  microseconds), busy-loops with `DBF` for the ROM's `TimeDBRA` count (0x273 on
+  the SE), calls `RmvTime` and takes the difference of the remaining counts as
+  the elapsed time; the minimum of ten rounds is the divisor. With `--speed>0`
+  most CPU time runs as "extra time" in which the VIA timers are frozen
+  (`DoEmulateExtraTime`, `VIABase::extraTimeBegin`), so the Time Manager sees 0
+  elapsed time and the divisor is 0. That the freeze is the reason follows from
+  the speed dependence and the zero remaining-count difference; the guest code
+  was read from a disassembly, not from source.
+- **Status:** not fixed in the emulator (the freeze is how every speed above 1x
+  works, and changing it would change the goldens). Worked around in
+  `test/net/run-ping.sh`: `MODEL=MacSE` adds `--speed=0` unless
+  `MAXIVMAC_ARGS` sets its own. It also means the fixed waits of the Plus
+  script are 16 times longer in guest ticks on the SE (a double-click gap of 1 s
+  is not a double-click there; the SE blocks use 150 ms). Real hardware is not
+  affected. Anything that loops against the VIA timers at a speed-up may show
+  the same kind of problem.
+
+### F42. A Restart on the SE (and Classic, II) left the guest without a disk
+
+- **Symptom:** after Special > Restart on `--model=MacSE` the ROM showed the
+  flashing "?" for ever, so MacTCP/EtherTalk (both need a restart) could not be
+  tested. The F21 fix did not apply: `DoMacReset()` (eject, zap, re-insert) only
+  runs for models up to the Plus (`isCompactMac()`); on the others the guest's
+  `RESET` only resets the devices and the ROM runs again, after the guest's
+  shutdown had ejected the images.
+- **Status:** fixed. `CustomReset()` calls `Sony_RestoreStartupDisks()` on those
+  models (an image that is still inserted is skipped), and `SonyDevice::reset()`
+  forgets the mount state so a still-inserted image is offered to the reopened
+  driver as a pending insert again. The second part is by reasoning, not by a
+  test of its own: in the observed case the Finder had ejected the images.
+  Covered by `test/run_script_tests.sh` ("Mac SE: Restart boots from the same
+  disk again", skipped without `MAXIVMAC_TEST_ROM_SE` / `data/roms/MacSE.ROM`);
+  the unfixed build times out there.

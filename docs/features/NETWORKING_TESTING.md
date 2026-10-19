@@ -15,6 +15,39 @@ test/net/run-ping.sh bld/macos/maxivmac          # or: ctest -R net_ping
 About 10 s to prepare the disk (once, cached) and 50 s per run on an M-series
 Mac at the emulator's maximum headless speed.
 
+## The same flow on the Mac SE
+
+The Mac SE (System 6.0.8, MacTCP, a SCSI DaynaPORT adapter) is the primary
+real-hardware target, so the flow also runs on `--model=MacSE`:
+
+```sh
+MODEL=MacSE MAXIVMAC_ROM_SE=data/roms/MacSE.ROM test/net/run-ping.sh bld/macos/maxivmac
+ctest -R net_ping_se          # skips (77) without the SE ROM or the other inputs
+```
+
+Same inputs and the same prepared disk as the Plus (it is always prepared on a
+Plus, `MAXIVMAC_PREP_ROM`; `MODEL` defaults to `MacPlus`, the Plus flow is
+unchanged). Result: 5 out / 5 in, SCSI trace with the same command mix as the
+Plus (55 WRITE, 7 GET MAC, 3 INQUIRY/ENABLE/SET MULTICAST; the READ count
+differs because the polling is per emulated time and the speed differs).
+The SE needs these differences, all in `test/net`:
+
+- **Real-time speed** (`--speed=0` is added automatically unless
+  `MAXIVMAC_ARGS` has its own `--speed=`). At the headless maximum speed
+  AppleTalk's start-up bombs with "divide by zero" on the SE (FINDINGS F41).
+  The run takes about 5 minutes instead of 50 seconds, and 1 s of emulated
+  time is 60 guest ticks, so the script's fixed waits are 16 times longer in
+  ticks than on the Plus.
+- `scripts/ping/MacSE/`: blocks that replace the common ones. The Control Panel
+  list has one more entry (Startup Device), so Network and MacTCP sit at other
+  rows (`ether`, `mactcp-open`, `mactcp-close`), and a Finder double-click has
+  to be two clicks 150 ms apart (`move`, `launch`; a 1 s gap is longer than the
+  double-click time at real-time speed). `run-ping.sh` picks
+  `scripts/ping/$MODEL/<block>.inc` over `scripts/ping/<block>.inc`.
+- A guest Restart needs F42 (the SE keeps running after RESET and used to lose
+  its disk).
+- Receive latency: see "SE evidence" below.
+
 ## Inputs (none of them is in the repository)
 
 Apple, Dayna and third-party software is not redistributed here. Every input
@@ -24,7 +57,10 @@ is an environment variable; if one is missing the script (and the ctest
 | Variable | What | Default |
 |---|---|---|
 | `MAXIVMAC` | emulator binary | `bld/macos/maxivmac` |
+| `MODEL` | `MacPlus` or `MacSE` | `MacPlus` |
 | `MAXIVMAC_ROM` | Mac Plus ROM | `data/roms/MacPlus.ROM` |
+| `MAXIVMAC_ROM_SE` | Mac SE ROM (`MODEL=MacSE`) | `data/roms/MacSE.ROM` |
+| `MAXIVMAC_PREP_ROM` | Mac Plus ROM for preparing the disk when `MODEL` is not `MacPlus` | `data/roms/MacPlus.ROM` |
 | `MAXIVMAC_BASE_DISK` | bootable System 6.0.8 HFS image (the one the golden tests use) | `extras/disks/608.hfs` |
 | `MAXIVMAC_DAYNA_INSTALLER` | the Dayna "DaynaPORT Installer": the `.sit`, the NDIF `.img` inside it, or the decoded HFS floppy | none |
 | `MAXIVMAC_MACTCP` | MacTCP 2.0.x: the file `MacTCP` or the archive holding it | none |
@@ -111,6 +147,19 @@ and the cursor lags).
 out (exit 1). The 2-4 ms the guest takes to come back for a reply is too short;
 see "Receive latency" in `NETWORKING_DAYNAPORT.md` for the measured table
 (fails below 6 ms, default 10 ms).
+
+### SE evidence
+
+On the author's machine (`--eth=slirp`, one run each, from a copy of the prepared
+disk): default latency **PASS 5/5**, twice in a row (4 min 25 s each);
+`--eth-latency=0` and `--eth-latency=5ms` both **FAIL** at the final
+`expect text "5/5/0/0"`, like the Plus control run (the Plus table above fails
+up to 4 ms and passes from 6 ms; the SE was not swept further, so the SE
+threshold is only known to be above 5 ms). The default 10 ms is therefore the
+right value for the SE too. `--scsi4=daynaport,multiframe` also passes 5/5, but
+a sequential ping never has two frames pending, so it says nothing about the
+multi-frame flag (FINDINGS F18 stays open). Not run: the `--eth=hub:` variant
+(needs an `ethhub` process; the SE side of it is the same backend code).
 
 ## Evidence kept with this change
 
