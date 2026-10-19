@@ -348,6 +348,9 @@ void Ncr5380::ackRise()
 		{
 			const unsigned group = odr_ >> 5;
 			cdbLen_ = group == 0 ? 6 : group == 1 || group == 2 ? 10 : group == 5 ? 12 : group == 4 ? 16 : 6;
+			// vendor-specific opcodes may have a target-defined length
+			if (sel_ >= 0 && targets_[sel_])
+				if (const size_t n = targets_[sel_]->cdbLength(odr_)) cdbLen_ = n;
 		}
 		break;
 	case Phase::DataOut:

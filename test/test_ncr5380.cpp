@@ -469,3 +469,25 @@ TEST_CASE("ncr5380 lines stay silent in legacy mode")
 	c.write(IDMARX, 0, false);
 	CHECK(n == 0);
 }
+
+TEST_CASE("ncr5380 bus: a target can override the CDB length of a vendor opcode")
+{
+	Rig r;
+	r.t.cdbLens[0x80] = 6; // group 4 would be 16 bytes
+	r.t.plans.push_back(ScriptedTarget::status());
+	r.connect();
+	r.h.sendCdb({0x80, 0, 0, 0, 0, 0});
+	REQUIRE(r.t.calls.size() == 1);
+	CHECK(r.t.calls[0].cdb.size() == 6);
+	r.h.finish();
+}
+
+TEST_CASE("ncr5380 bus: without an override group-4 opcodes still take 16 bytes")
+{
+	Rig r;
+	r.t.plans.push_back(ScriptedTarget::status());
+	r.connect();
+	r.h.sendCdb({0x80, 0, 0, 0, 0, 0});
+	CHECK(r.t.calls.empty());
+	CHECK(r.h.phase() == P_CMD);
+}
