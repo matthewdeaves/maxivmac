@@ -234,8 +234,8 @@ native-integer comparison equals the byte-wise one, so the guest behaves the
 same before and after the fix; only the little-endian POSIX side changes
 (not verified by building an old 68k binary).
 
-**Flakiness.** 21 container runs of the final code (R1 to R4, three each, plus
-four control runs) gave no flaky result. Two flakes were found and fixed on the
+**Flakiness.** 18 container runs of the final code (six rungs, three each) and
+5 control runs gave no flaky result. Two flakes were found and fixed on the
 way, both in the test and not in the system under test: the container's ping at
 the Finder (MacTCP not yet opened, see above) and a second, unanswered SYN
 after the guest quit (test_mesh redials) breaking an "exactly one SYN" check,
