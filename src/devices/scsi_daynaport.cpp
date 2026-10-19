@@ -192,6 +192,12 @@ scsi::Step DaynaPortTarget::handle(uint8_t lun)
 				}
 				uint8_t *r = buf_.data() + total;
 				eth_->receive(std::span<uint8_t>(r + kReadHeader, pk));
+				std::fill(r + kReadHeader + pk, r + kReadHeader + n, 0); // pad
+				if (!accepts(std::span<const uint8_t>(r + kReadHeader, pk)))
+				{
+					bump(stats_.rxFiltered);
+					continue;
+				}
 				const uint32_t crc = crc32(r + kReadHeader, n);
 				for (int i = 0; i < 4; i++) r[kReadHeader + n + i] = uint8_t(crc >> (8 * i));
 				bump(stats_.rxFrames);
@@ -229,10 +235,20 @@ scsi::Step DaynaPortTarget::handle(uint8_t lun)
 			}
 			return error(kIllegalRequest);
 		case kSetMode:
-			if (cdb_[5] == 0x40) return error(kIllegalRequest); // MAC override: unsupported
+			// 0x40: set the adapter's MAC address (6 data bytes).
+			if (cdb_[5] == 0x40)
+			{
+				if (cdb_[4] < 6) return error(kIllegalRequest);
+				return dataOut(cdb_[4]);
+			}
 			return done();
 		case kSetMulticast:
 			if (size > kBufSize || size % 6) return error(kIllegalRequest);
+			if (!size) // no data phase: an empty list
+			{
+				length_ = 0;
+				return dataOutDone();
+			}
 			return dataOut(size);
 		case kEnable:
 			enabled_ = (cdb_[5] & 0x80) != 0;
@@ -251,6 +267,25 @@ scsi::Step DaynaPortTarget::handle(uint8_t lun)
 // Called after each complete DATA OUT record, not just at command end.
 scsi::Step DaynaPortTarget::dataOutDone()
 {
+	if (cdb_[0] == kSetMode)
+	{
+		std::copy_n(buf_.begin(), 6, mac_.begin());
+		SCSI_LOG("dayna: MAC set to %s", hex(std::span<const uint8_t>(mac_)).c_str());
+		return done();
+	}
+	if (cdb_[0] == kSetMulticast)
+	{
+		multicast_.clear();
+		allMulticast_ = length_ / 6 > kMaxMulticast;
+		for (size_t i = 0; i < length_ / 6 && i < kMaxMulticast; i++)
+		{
+			Mac m;
+			std::copy_n(buf_.begin() + i * 6, 6, m.begin());
+			multicast_.push_back(m);
+		}
+		SCSI_LOG("dayna: %zu multicast addresses%s", length_ / 6, allMulticast_ ? " (too many: accept all)" : "");
+		return done();
+	}
 	if (cdb_[0] == kWrite)
 	{
 		if (writeHeader_)
@@ -278,6 +313,22 @@ scsi::Step DaynaPortTarget::dataOutDone()
 		}
 	}
 	return done();
+}
+
+bool DaynaPortTarget::accepts(std::span<const uint8_t> frame) const
+{
+	if (frame.size() < 6) return false;
+	const auto *d = frame.data();
+	if (std::equal(mac_.begin(), mac_.end(), d)) return true;
+	if (d[0] & 1) // group address
+	{
+		static constexpr Mac kBroadcast = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+		if (std::equal(kBroadcast.begin(), kBroadcast.end(), d)) return true;
+		if (allMulticast_) return true;
+		for (const Mac &m : multicast_)
+			if (std::equal(m.begin(), m.end(), d)) return true;
+	}
+	return false;
 }
 
 void DaynaPortTarget::busReset()

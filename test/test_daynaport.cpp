@@ -123,8 +123,24 @@ struct DnRig
 	}
 };
 
-const Bytes kSixtyZeros(60, 0);
+// IEEE CRC-32 as sent on the wire (low byte first), for checking the FCS.
+uint32_t crc32(const Bytes &d)
+{
+	uint32_t crc = 0xFFFFFFFFu;
+	for (uint8_t b : d)
+	{
+		crc ^= b;
+		for (int i = 0; i < 8; i++) crc = (crc >> 1) ^ ((crc & 1) ? 0xEDB88320u : 0);
+	}
+	return ~crc;
+}
 } // namespace
+
+TEST_CASE("daynaport test helper: crc32 matches the standard check value")
+{
+	CHECK(crc32(Bytes{'1', '2', '3', '4', '5', '6', '7', '8', '9'}) == 0xCBF43926u);
+	CHECK(crc32(Bytes(60, 0)) == 0x04128908u); // donor's known vector
+}
 
 TEST_CASE("daynaport: selecting an unattached ID never raises BSY")
 {
@@ -214,12 +230,14 @@ TEST_CASE("daynaport: READ pads to 60 bytes and appends the FCS; WRITE sends the
 	{
 		DnRig r;
 		r.enable();
-		// 60 zero bytes: known CRC-32 0x04128908.  Ethernet header only needs 14.
-		r.eth->inject(Bytes(60, 0));
+		const Bytes in = makeFrame(60, 0);
+		r.eth->inject(in);
 		Bytes b = r.read(0x08, 1524, dma ? 0xC0 : 0x80, 70, dma);
 		CHECK(b[0] == 0);
 		CHECK(b[1] == 64);
-		CHECK(std::memcmp(b.data() + 66, "\x08\x89\x12\x04", 4) == 0);
+		const uint32_t crc = crc32(in);
+		const Bytes fcs{uint8_t(crc), uint8_t(crc >> 8), uint8_t(crc >> 16), uint8_t(crc >> 24)};
+		CHECK(Bytes(b.begin() + 66, b.begin() + 70) == fcs);
 
 		Bytes frame = makeFrame(60, 0xA5);
 		r.command(0x0A, 60, 0);
@@ -500,4 +518,60 @@ TEST_CASE("daynaport: a frame dropped for not fitting the READ is counted in rxO
 	r.read(0x08, 100, 0xC0, 6);
 	CHECK(r.t.stats().rxOversize == 1);
 	CHECK(r.t.stats().rxFrames == 0);
+}
+
+TEST_CASE("daynaport: the adapter's own MAC, broadcast and listed multicast pass; the rest is filtered")
+{
+	const DaynaPortTarget::Mac mine = DaynaPortTarget::kDefaultMac;
+	const DaynaPortTarget::Mac atalk = {0x09, 0x00, 0x07, 0xFF, 0xFF, 0xFF};
+	DnRig r(4, DaynaPortTarget::kDefaultMac, {true});
+	r.enable();
+	r.eth->inject(makeFrame(60, 1, mine));
+	r.eth->inject(makeFrame(60, 2, {2, 0, 0, 0, 0, 0x77})); // someone else's unicast
+	r.eth->inject(makeFrame(60, 3));						// broadcast
+	r.eth->inject(makeFrame(60, 4, atalk));					// multicast, not subscribed
+	Bytes b = r.read(0x08, 1524, 0xC0, 2 * 70);
+	CHECK(b[6 + 20] == 1);
+	CHECK(b[70 + 6 + 20] == 3);
+	CHECK(r.t.stats().rxFiltered == 2);
+	CHECK(r.eth->queued() == 0);
+
+	r.command(0x0D, 6, 0); // subscribe
+	r.output(Bytes(atalk.begin(), atalk.end()), false);
+	r.finish(0);
+	CHECK(r.t.multicast().size() == 1);
+	r.eth->inject(makeFrame(60, 5, atalk));
+	CHECK(r.read(0x08, 1524, 0xC0, 70)[6 + 20] == 5);
+
+	r.command(0x0D, 0, 0); // an empty list unsubscribes
+	r.finish(0);
+	r.eth->inject(makeFrame(60, 6, atalk));
+	CHECK(r.read(0x08, 1524, 0xC0, 6) == Bytes(6, 0));
+}
+
+TEST_CASE("daynaport: MAC override (0x0C/0x40) is accepted and reported by GET MAC")
+{
+	DnRig r;
+	r.enable();
+	const DaynaPortTarget::Mac novel = {2, 0, 0, 0xAB, 0xCD, 0xEF};
+	r.command(0x0C, 6, 0x40);
+	r.output(Bytes(novel.begin(), novel.end()), false);
+	r.finish(0);
+	CHECK(r.t.mac() == novel);
+	Bytes m = r.read(0x09, 6, 0, 18);
+	CHECK(std::memcmp(m.data(), novel.data(), 6) == 0);
+	r.eth->inject(makeFrame(60, 1, DaynaPortTarget::kDefaultMac)); // old MAC: no longer ours
+	r.eth->inject(makeFrame(60, 2, novel));
+	Bytes b = r.read(0x08, 1524, 0xC0, 70);
+	CHECK(b[6 + 20] == 2);
+	CHECK(r.t.stats().rxFiltered == 1);
+}
+
+TEST_CASE("daynaport: MAC override needs six data bytes; a custom --eth-mac is the starting MAC")
+{
+	DnRig r(4, {2, 1, 2, 3, 4, 5});
+	r.command(0x0C, 4, 0x40);
+	r.finish(2);
+	Bytes m = r.read(0x09, 6, 0, 18);
+	CHECK(Bytes(m.begin(), m.begin() + 6) == Bytes{2, 1, 2, 3, 4, 5});
 }
