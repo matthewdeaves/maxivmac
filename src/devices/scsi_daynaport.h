@@ -53,6 +53,18 @@ public:
 	void tick() override;
 	const char *name() const override { return "daynaport"; }
 
+	// Adapter statistics; saturating, so they never wrap.
+	struct Stats
+	{
+		uint32_t rxFrames = 0;	  // frames delivered to the guest
+		uint32_t txFrames = 0;	  // frames sent to the backend
+		uint32_t txDropped = 0;	  // guest frames dropped (link down or backend refused)
+		uint32_t rxOversize = 0;  // received frames dropped: too big for the guest's READ allocation
+	};
+	const Stats &stats() const { return stats_; }
+	// Frames lost to receive-queue overflow in the backend.
+	uint32_t rxDropped() const;
+
 	EthernetBackend &backend() { return *eth_; }
 	const Mac &mac() const { return mac_; }
 
@@ -73,6 +85,7 @@ private:
 	std::vector<uint8_t> buf_ = std::vector<uint8_t>(kBufSize);
 	size_t length_ = 0;
 	uint8_t sense_ = 0;
+	Stats stats_;
 	bool enabled_ = false;
 	bool writeHeader_ = false;
 };

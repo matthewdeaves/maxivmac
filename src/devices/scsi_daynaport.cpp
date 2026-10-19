@@ -54,6 +54,11 @@ constexpr uint8_t kIllegalRequest = 5;
 constexpr uint8_t kNotReady = 2;
 constexpr uint8_t kHardwareError = 4;
 
+void bump(uint32_t &c)
+{
+	if (c != UINT32_MAX) c++;
+}
+
 std::string hex(std::span<const uint8_t> b)
 {
 	std::string s;
@@ -67,6 +72,11 @@ std::string hex(std::span<const uint8_t> b)
 	return s;
 }
 } // namespace
+
+uint32_t DaynaPortTarget::rxDropped() const
+{
+	return uint32_t(std::min<uint64_t>(eth_->droppedFrames(), UINT32_MAX));
+}
 
 DaynaPortTarget::DaynaPortTarget(std::unique_ptr<EthernetBackend> eth, Mac mac, Options opt)
 	: eth_(std::move(eth)), mac_(mac), opt_(opt)
@@ -176,6 +186,7 @@ scsi::Step DaynaPortTarget::handle(uint8_t lun)
 						// (six-byte) header.
 						SCSI_LOG("dayna: READ of %zu bytes cannot hold a %zu byte record: frame dropped", size, rec);
 						eth_->receive(std::span<uint8_t>(buf_.data() + kReadHeader, kEthMaxFrame));
+						bump(stats_.rxOversize);
 					}
 					break; // otherwise the frame stays queued for the next READ
 				}
@@ -183,6 +194,7 @@ scsi::Step DaynaPortTarget::handle(uint8_t lun)
 				eth_->receive(std::span<uint8_t>(r + kReadHeader, pk));
 				const uint32_t crc = crc32(r + kReadHeader, n);
 				for (int i = 0; i < 4; i++) r[kReadHeader + n + i] = uint8_t(crc >> (8 * i));
+				bump(stats_.rxFrames);
 				r[0] = uint8_t((n + 4) >> 8);
 				r[1] = uint8_t(n + 4);
 				if (total) buf_[last + 5] |= kMoreFlag;
@@ -193,7 +205,13 @@ scsi::Step DaynaPortTarget::handle(uint8_t lun)
 			return dataIn(total ? total : kReadHeader);
 		}
 		case kGetMac:
+			// MAC, then three big-endian counters: frame alignment errors, CRC
+			// errors (neither can occur here) and frames lost.
 			std::copy(mac_.begin(), mac_.end(), buf_.begin());
+			{
+				const uint32_t lost = rxDropped();
+				for (int i = 0; i < 4; i++) buf_[14 + i] = uint8_t(lost >> (24 - 8 * i));
+			}
 			// Hardware returns all 18 bytes even for the diagnostics size-six CDB.
 			return dataIn(18);
 		case kWrite:
@@ -244,8 +262,15 @@ scsi::Step DaynaPortTarget::dataOutDone()
 			return dataOut(n);
 		}
 		// Cable unplugged: the frame goes nowhere, as on real hardware.
-		if (eth_->linkUp() && !eth_->send(std::span<const uint8_t>(buf_.data(), length_)))
+		if (!eth_->linkUp())
+			bump(stats_.txDropped);
+		else if (!eth_->send(std::span<const uint8_t>(buf_.data(), length_)))
+		{
+			bump(stats_.txDropped);
 			return error(kHardwareError);
+		}
+		else
+			bump(stats_.txFrames);
 		if (cdb_[5] == 0x80)
 		{
 			writeHeader_ = true;
