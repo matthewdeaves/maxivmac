@@ -454,3 +454,68 @@ TEST_CASE("ncr5380 bus: detaching the last target restores the legacy stub")
 	c.write(ICR, 0x80, false);
 	CHECK(c.read(BSR, false) == 0x10);
 }
+
+TEST_CASE("ncr5380 bus: selection works at the lowest and highest IDs")
+{
+	for (int id : {0, 1, 5, 6})
+	{
+		Rig r(id);
+		r.t.plans.push_back(ScriptedTarget::status());
+		r.connect(id);
+		r.h.sendCdb({0, 0, 0, 0, 0, 0});
+		r.h.finish();
+		CHECK(r.t.calls.size() == 1);
+	}
+}
+
+TEST_CASE("ncr5380 bus: several targets, selection picks the addressed one")
+{
+	ScriptedTarget a, b;
+	Ncr5380 c;
+	Host h{c};
+	c.attach(0, &a);
+	c.attach(6, &b);
+	b.plans.push_back(ScriptedTarget::status());
+	REQUIRE(h.select(6, false));
+	h.sendCdb({0, 0, 0, 0, 0, 0});
+	CHECK(a.calls.empty());
+	CHECK(b.calls.size() == 1);
+}
+
+TEST_CASE("ncr5380 arbitration: AIP set when bus free, LA clear, our ID on the bus")
+{
+	Rig r;
+	r.c.write(ODR, 0x80, false);
+	r.c.write(MR, 0x01, false);
+	CHECK((r.c.read(ICR, false) & 0x60) == 0x40);
+	CHECK(r.c.read(CDR, false) == 0x80);
+	CHECK(r.h.bsy()); // the chip drives BSY while arbitrating
+	r.c.write(MR, 0x00, false);
+	CHECK((r.c.read(ICR, false) & 0x60) == 0x00);
+	CHECK_FALSE(r.h.bsy());
+}
+
+TEST_CASE("ncr5380 arbitration: waits for bus free")
+{
+	Rig r;
+	r.t.plans.push_back(ScriptedTarget::status());
+	r.connect();
+	r.c.write(MR, 0x01, false); // bus is busy with the target
+	CHECK((r.c.read(ICR, false) & 0x40) == 0);
+	r.h.sendCdb({0, 0, 0, 0, 0, 0});
+	r.c.write(MR, 0x01, false);
+	CHECK((r.c.read(ICR, false) & 0x40) == 0);
+	CHECK(r.h.recvByte() == 0); // status
+	CHECK((r.c.read(ICR, false) & 0x40) == 0);
+	CHECK(r.h.recvByte() == 0); // COMMAND COMPLETE: bus goes free
+	CHECK((r.c.read(ICR, false) & 0x40) != 0); // arbitration now proceeds
+}
+
+TEST_CASE("ncr5380 arbitration: RST clears AIP")
+{
+	Rig r;
+	r.c.write(ODR, 0x80, false);
+	r.c.write(MR, 0x01, false);
+	r.c.write(ICR, 0x80, false);
+	CHECK((r.c.read(ICR, false) & 0x40) == 0);
+}
