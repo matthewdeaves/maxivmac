@@ -40,6 +40,11 @@ Step dataInDone();       // one DataIn record consumed; default: STATUS
 void busReset(); void abort(); const char *name() const;
 ```
 
+`cdbLength(opcode)` lets a target with vendor opcodes (DaynaPORT 0x40/0x80)
+override the standard group-based CDB length (0 = standard). `tick()` is
+called once per emulated 1/60 s tick (`SCSIDevice::tick`) so a target can pump
+host I/O.
+
 A `Step` is `DataIn` (bus sends the target-owned `in` span), `DataOut` (bus
 fills the target-owned `out` span, then calls `dataOutDone`) or
 `StatusPhase` (status byte, then COMMAND COMPLETE). The bus owns phases,
@@ -75,8 +80,11 @@ Phase machine: `Free -> Selected -> [MsgOut] -> Command -> (DataIn | DataOut)* -
 
 The Mini vMac DaynaPORT fork (`SCSIDNPT.h`, GPL-2.0-only) implements one
 target at ID 4 with shared globals; its register and phase sequencing was
-used as a reference for what the System 6/7 Dayna driver needs. No code
-was copied; the design here is a generalised bus with a target interface.
+used as a reference for what the System 6/7 Dayna driver needs. The bus
+here is a generalised model with a target interface and shares no code with
+it. The DaynaPORT *protocol* logic in `scsi_daynaport.cpp` is derived from
+the donor's `DAYNAPRT.h` (Mikhail Kandel, GPL-2.0-only) and carries its
+attribution.
 The legacy stub retains its original attribution (Yoav Shadmi 1998, Philip
 Cummins).
 

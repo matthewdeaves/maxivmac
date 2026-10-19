@@ -1,5 +1,10 @@
 # Networking — Get a Classic Mac on the Internet
 
+> **Also available:** a DaynaPORT SCSI Ethernet adapter (`--scsi4=daynaport
+> --eth=slirp`) for EtherTalk and MacTCP over Ethernet; see
+> [NETWORKING_DAYNAPORT.md](NETWORKING_DAYNAPORT.md). This document covers the
+> SLIP serial route.
+
 ## Goal
 
 Enable the emulated Macintosh to reach the internet (HTTP, FTP, Telnet, etc.)
@@ -26,9 +31,9 @@ identically on real hardware.
 
 | Era | Stack | Minimum System | Link Layers | Notes |
 |-----|-------|----------------|-------------|-------|
-| 1988–1994 | **MacTCP 1.x–2.0.6** | System 6.0.4, 68000+ (1 MB RAM) | SLIP, Ethernet | Apple's first TCP/IP. SLIP over serial built-in. |
+| 1988–1994 | **MacTCP 1.x–2.0.6** | System 6.0.4, 68000+ (1 MB RAM) | LocalTalk, Ethernet | Apple's first TCP/IP. No serial IP link of its own; SLIP/PPP need a third-party link driver. |
 | 1991–1994 | **MacPPP 2.0.1** / **InterSLIP 1.0** | System 6.0.4+ | PPP/SLIP over serial | Third-party serial link drivers that work with MacTCP. |
-| 1994 | **MacTCP 2.0.6** | System 6.0.4+ | SLIP, Ethernet | Final MacTCP. Free with System 7.5. |
+| 1994 | **MacTCP 2.0.6** | System 6.0.4+ | LocalTalk, Ethernet | Final MacTCP. Free with System 7.5. |
 | 1995+ | **Open Transport 1.0+** | System 7.5.2, 68030+ (5 MB) | Ethernet, PPP, SLIP | Replaced MacTCP. Much heavier. Needs 68030 minimum. |
 | 1997+ | **FreePPP 2.6** | System 7.1+ | PPP over serial | Popular free PPP, but post–System 7. |
 
@@ -37,9 +42,11 @@ identically on real hardware.
 **MacTCP 2.0.6 + SLIP over the modem port, running on System 6.0.8.**
 
 This is the lightest stack that works. It runs on a Mac Plus (68000, 1 MB RAM).
-MacTCP handles IP, TCP, UDP, and DNS. SLIP is built into MacTCP's control panel
-— no extra INIT or extension required. The user selects "Serial Line (SLIP)"
-as the connection method and points it at the modem or printer port.
+MacTCP handles IP, TCP, UDP, and DNS. MacTCP 2.0.6 itself only supports
+LocalTalk and Ethernet links, so SLIP needs a third-party link driver such as
+InterSLIP or MacSLIP (a small extension / control panel). The user selects
+that driver in MacTCP's control panel and points it at the modem or printer
+port.
 
 PPP is heavier (requires MacPPP INIT) and adds complexity for no benefit
 inside an emulator where the serial link is lossless.

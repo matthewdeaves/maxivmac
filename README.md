@@ -92,11 +92,21 @@ control panel.  The host window resizes automatically.
 ### SLIP networking
 
 Connect the emulated Mac to the host's internet over a virtual serial port
-using MacTCP 2.0.6 and built-in SLIP.  Runs Netscape 2.0, FTP, Telnet, and
+using MacTCP 2.0.6 with a third-party SLIP driver (InterSLIP or MacSLIP).  Runs Netscape 2.0, FTP, Telnet, and
 anything else that speaks MacTCP — on System 6.0.8 and a Mac Plus.
 
 ```sh
-maxivmac --serial-a=slip --slip-redir=tcp:8080:10.0.2.15:80 disk.img
+maxivmac --serial-a=slip --net-redir=tcp:8080:10.0.2.15:80 disk.img
+```
+
+### DaynaPORT Ethernet
+
+A DaynaPORT SCSI/Link adapter gives the guest real Ethernet (EtherTalk,
+MacTCP over Ethernet) with the stock Dayna driver; see
+[docs/features/NETWORKING_DAYNAPORT.md](docs/features/NETWORKING_DAYNAPORT.md).
+
+```sh
+maxivmac --model=MacPlus --scsi4=daynaport --eth=slirp disk.hfs
 ```
 
 <!-- ![SLIP demo](media/demo-slip.gif) -->
@@ -211,7 +221,10 @@ maxivmac --model=MacPlus --shared ~/Desktop/shared MacPlus.mac
 | `--fullscreen` | Start in fullscreen mode |
 | `--shared=PATH` | Mount host directory as HFS volume (repeatable) |
 | `--serial-a=MODE` | Modem port: `loopback` `slip` `pty` `file:tx=…` |
-| `--slip-redir=SPEC` | Port forward: `tcp:hostport:guestip:guestport` |
+| `--net-redir=SPEC` | Port forward for slirp (SLIP or `--eth=slirp`), listening on 127.0.0.1: `tcp:hostport:guestip:guestport` (`--slip-redir` is an alias) |
+| `--scsiN=TYPE` | Attach a SCSI target at ID N (0-6): `daynaport[,multiframe]` or `none` (compact Macs; refused on the Mac II family) |
+| `--eth=SPEC` | Ethernet backend for the DaynaPORT: `slirp[,hostfwd=tcp:[HOSTIP]:HOSTPORT-GUESTIP:GUESTPORT]` or `none`. Default `slirp`, but `none` (cable out) with `--headless` or `--dbg-script` so scripted runs stay repeatable; forwards listen on 127.0.0.1 unless HOSTIP is given |
+| `--eth-mac=MAC` | DaynaPORT MAC address (default `02:6d:78:76:6d:01`) |
 | `--debugger` | Start paused at first instruction with `(dbg)` prompt |
 | `--dbg-script=FILE` | Load and execute a `.dbg` script at startup (repeatable) |
 | `--record=PATH` | Record a golden file for non-regression testing |
