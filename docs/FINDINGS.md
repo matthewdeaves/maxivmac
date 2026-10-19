@@ -227,7 +227,10 @@ the branch that found them.
 ### F20. Not done / not verified in this pass
 
 - Two DaynaPORTs each get their own slirp (same guest address, same forwards);
-  documented, not detected.
+  documented. A clashing host forward was already refused by the bind, but the
+  message did not say why: it now names the likely cause, and a unit test
+  checks that the second stack is refused. The two stacks still do not see
+  each other.
 - The `--eth=hub` backend (join an ethhub from the emulator) was a separate task: now F23.
 - The MacTCP ping end to end was run on the pre-review `integration` build by
   a different task; the defaults changed here (one frame per READ, `none` in
