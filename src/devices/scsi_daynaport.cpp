@@ -44,6 +44,12 @@ enum : uint8_t
 	kEnable = 0x0E,
 	kVendor80 = 0x80
 };
+constexpr size_t kReadHeader = 6; // size:2 + flags:4
+// Low byte of the flags word in a READ record header: more frames follow.
+// UNVERIFIED: 0x10 is what BlueSCSI-v2 (and the Mini vMac fork) use; PiSCSI's
+// e_more_data_available may instead be 0x00000001.  Never checked against the
+// real driver, which is why it only matters when frames queue up.
+constexpr uint8_t kMoreFlag = 0x10;
 constexpr uint8_t kIllegalRequest = 5;
 constexpr uint8_t kNotReady = 2;
 constexpr uint8_t kHardwareError = 4;
@@ -62,8 +68,8 @@ std::string hex(std::span<const uint8_t> b)
 }
 } // namespace
 
-DaynaPortTarget::DaynaPortTarget(std::unique_ptr<EthernetBackend> eth, Mac mac)
-	: eth_(std::move(eth)), mac_(mac)
+DaynaPortTarget::DaynaPortTarget(std::unique_ptr<EthernetBackend> eth, Mac mac, Options opt)
+	: eth_(std::move(eth)), mac_(mac), opt_(opt)
 {
 }
 
@@ -143,30 +149,48 @@ scsi::Step DaynaPortTarget::handle(uint8_t lun)
 		{
 			// The boot-time size-one probe must fail without a data phase.
 			if (size < 6) return error(kIllegalRequest);
-			size_t n = 0;
-			if (enabled_)
-				if (const size_t pk = eth_->peekSize())
+			// One record [size:2][flags:4][frame+FCS] per READ; with the multiFrame
+			// option, pack as many whole records as fit.
+			// A frame that does not fit after others stays queued for the next
+			// READ; one that cannot fit at all is dropped.  The "more" flag is set in
+			// a record's header when another frame follows it (in this transfer
+			// or still queued), so the driver knows to keep reading.
+			const size_t room = std::min(size, buf_.size());
+			size_t total = 0, last = 0;
+			while (enabled_)
+			{
+				if (total && !opt_.multiFrame) break;
+				const size_t pk = eth_->peekSize();
+				if (!pk) break;
+				// Ethernet minimum excludes FCS; backends may omit padding.
+				const size_t n = std::max<size_t>(pk, 60);
+				const size_t rec = kReadHeader + n + 4;
+				if (total + rec > room)
 				{
-					// Ethernet minimum excludes FCS; backends may omit padding.
-					n = std::max<size_t>(pk, 60);
-					eth_->receive(std::span<uint8_t>(buf_.data() + 6, kEthMaxFrame));
-					if (n + 10 > size)
+					if (!total)
 					{
-						// Too big for this READ.  Refusing it with CHECK CONDITION and
+						// Can never fit this READ.  Refusing it with CHECK CONDITION and
 						// leaving it queued would wedge receive: the driver never sends
-						// REQUEST SENSE and retries with the same length, so every
-						// later READ would fail the same way.  Drop the frame and
-						// answer with the empty (six-byte) header.
-						SCSI_LOG("dayna: READ of %zu bytes cannot hold a %zu byte frame: dropped", size, n + 10);
-						return dataIn(6);
+						// REQUEST SENSE and retries with the same length, so every later
+						// READ would fail the same way.  Drop it and answer with the empty
+						// (six-byte) header.
+						SCSI_LOG("dayna: READ of %zu bytes cannot hold a %zu byte record: frame dropped", size, rec);
+						eth_->receive(std::span<uint8_t>(buf_.data() + kReadHeader, kEthMaxFrame));
 					}
-					const uint32_t crc = crc32(buf_.data() + 6, n);
-					for (int i = 0; i < 4; i++) buf_[6 + n + i] = uint8_t(crc >> (8 * i));
-					n += 4;
-					buf_[0] = uint8_t(n >> 8);
-					buf_[1] = uint8_t(n);
+					break; // otherwise the frame stays queued for the next READ
 				}
-			return dataIn(n + 6);
+				uint8_t *r = buf_.data() + total;
+				eth_->receive(std::span<uint8_t>(r + kReadHeader, pk));
+				const uint32_t crc = crc32(r + kReadHeader, n);
+				for (int i = 0; i < 4; i++) r[kReadHeader + n + i] = uint8_t(crc >> (8 * i));
+				r[0] = uint8_t((n + 4) >> 8);
+				r[1] = uint8_t(n + 4);
+				if (total) buf_[last + 5] |= kMoreFlag;
+				last = total;
+				total += rec;
+			}
+			if (total && eth_->peekSize()) buf_[last + 5] |= kMoreFlag;
+			return dataIn(total ? total : kReadHeader);
 		}
 		case kGetMac:
 			std::copy(mac_.begin(), mac_.end(), buf_.begin());

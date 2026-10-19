@@ -27,14 +27,23 @@
 #include "devices/eth_backend.h"
 #include "devices/scsi_target.h"
 
+struct DaynaPortOptions
+{
+	// Pack several queued frames into one READ.  Off by default: one frame per
+	// READ, as BlueSCSI-v2 does.  Packing follows the Mini vMac fork and is
+	// unverified against the real driver (see the flag note in the .cpp).
+	bool multiFrame = false;
+};
+
 class DaynaPortTarget : public scsi::ScsiTarget
 {
 public:
+	using Options = DaynaPortOptions;
 	using Mac = std::array<uint8_t, 6>;
 	// Stable, locally administered (bit 1 of the first octet set).
 	static constexpr Mac kDefaultMac = {0x02, 0x6D, 0x78, 0x76, 0x6D, 0x01};
 
-	explicit DaynaPortTarget(std::unique_ptr<EthernetBackend> eth, Mac mac = kDefaultMac);
+	explicit DaynaPortTarget(std::unique_ptr<EthernetBackend> eth, Mac mac = kDefaultMac, Options opt = {});
 
 	size_t cdbLength(uint8_t opcode) const override { return (opcode == 0x40 || opcode == 0x80) ? 6 : 0; }
 	scsi::Step command(uint8_t lun, std::span<const uint8_t> cdb) override;
@@ -48,7 +57,8 @@ public:
 	const Mac &mac() const { return mac_; }
 
 private:
-	static constexpr size_t kBufSize = kEthMaxFrame + 10;
+	// Transfer buffer: bounds a packed READ and the largest DATA OUT.
+	static constexpr size_t kBufSize = 16384;
 
 	scsi::Step handle(uint8_t lun);
 	scsi::Step error(uint8_t senseKey);
@@ -58,8 +68,9 @@ private:
 
 	std::unique_ptr<EthernetBackend> eth_;
 	Mac mac_;
-	std::array<uint8_t, kBufSize> buf_{};
+	Options opt_;
 	std::array<uint8_t, 16> cdb_{};
+	std::vector<uint8_t> buf_ = std::vector<uint8_t>(kBufSize);
 	size_t length_ = 0;
 	uint8_t sense_ = 0;
 	bool enabled_ = false;
