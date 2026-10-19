@@ -55,6 +55,13 @@ RUNGS = {
     "r5":  dict(guest="10.88.0.20/24", tap="10.88.0.10/24", peer="bombertalk", app="BomberTalk",
                 game=True,
                 what="BomberTalk 68k <-> POSIX/SDL BomberTalk: start a game from the lobby, both reach the game screen, each sees the other's movement and bombs"),
+    # R5 up to the game, then the round ENDS: the POSIX player (P0, the lowest rank = the
+    # game-over authority) drops a bomb on its own tile and stays in the blast; the guest stays
+    # at its corner.  Both must detect the game over, the authority sends MSG_GAME_OVER, both
+    # run the disconnect grace period and go back to the lobby.
+    "r6":  dict(guest="10.88.0.20/24", tap="10.88.0.10/24", peer="bombertalk", app="BomberTalk",
+                game="end",
+                what="BomberTalk 68k <-> POSIX/SDL BomberTalk: play to the END (POSIX player stands in its own blast): game over, grace period, back to the lobby on both sides"),
     "r3b": dict(guest="10.88.0.20/8", tap="10.0.2.15/8", peer="test_mesh", app="test_mesh",
                 what="byte-order case as first specified: peer 10.0.2.15/8 (ranks agree under both readings)"),
 }
@@ -197,6 +204,16 @@ class Run:
         return s
 
     def bt_game_script(self, launch):
+        if self.cfg.get("game") == "end":
+            # as R5 up to the game; the guest then just stands at its corner (13,1), far from
+            # the POSIX player's blast, while the round ends and both return to the lobby
+            return (launch + "wait for 160s\nscreenshot \"E2E_BT_MENU\"\n"
+                    "key return hold 2s\nwait for 160s\n"
+                    'wait text "Press Return to Start" 3000s\nwait for 160s\nscreenshot "E2E_BT_LOBBY"\n'
+                    "key return hold 2s\nwait for 320s\nscreenshot \"E2E_GAME_1\"\n"
+                    "# the POSIX player bombs itself now (driver); fuse 3 s, death 1 s, grace 1.5 s\n"
+                    "wait for 640s\nscreenshot \"E2E_END_1\"\nwait for 640s\nscreenshot \"E2E_END_2\"\n"
+                    "wait for 640s\nscreenshot \"E2E_END_3\"\n")
         # Menu -> lobby as in R4.  Then wait for the lobby to list the peer ("Press Return to
         # Start" is only drawn once a peer is discovered), give the TCP mesh time to form and
         # press Return: the guest is the one that sends MSG_GAME_START.  In the game it plays
@@ -243,6 +260,13 @@ class Run:
         if self.wait_capture(self.tap_ip, "Game started:", 900) is None:
             return
         self.mark("posix_in_game")
+        if self.cfg.get("game") == "end":
+            # let the guest enter the game too, then drop a bomb on the spot and stay in it
+            self.wait_capture(self.guest_ip, "Game started:", 300)
+            time.sleep(8.0)
+            self.press(SPACE, secs=0.3)
+            self.mark("posix_self_bomb")
+            return
         if self.wait_capture(self.tap_ip, "RX bomb placed P1", 900) is None:
             return
         self.mark("posix_got_guest_bomb")
@@ -419,7 +443,10 @@ class Run:
                           tcp_unanswered_syn_tuples=len(unanswered), initiators=sorted(initiators))
         # test_mesh redials after a disconnect, so SYNs that nobody answers can follow the
         # guest's exit at the end of the run; they are counted, not failed.
-        self.check("one_tcp_connection", len(established) == 1,
+        # R6: after the round the players are back in the lobby and may dial again, so the first
+        # connection is what is asserted there
+        ok_n = (lambda k: k >= 1) if self.cfg.get("game") == "end" else (lambda k: k == 1)
+        self.check("one_tcp_connection", ok_n(len(established)),
                    "%d established connection(s) (SYN answered by SYN-ACK), %d later unanswered SYN(s) (test_mesh redials after the guest quits); SYN sent by: %s"
                    % (len(established), len(unanswered), ",".join(sorted(initiators)) or "nobody"))
         # who should dial: the lower address compared as network-order bytes (PT_ShouldInitiate)
@@ -430,7 +457,7 @@ class Run:
             "bytewise_lower": lower,
             "little_endian_peer_thinks_lower": ga if le(gip) < le(tip) else ta,
             "big_endian_mac_thinks_lower": ga if be(gip) < be(tip) else ta}
-        self.check("initiator_is_designated", initiators == {lower} and len(established) == 1,
+        self.check("initiator_is_designated", initiators == {lower} and ok_n(len(established)),
                    "SYN from %s; bytewise-lower address is %s (peer reads it as LE: %s lower, Mac as BE: %s lower)"
                    % (",".join(sorted(initiators)) or "nobody", lower,
                       self.facts["native_int_rank"]["little_endian_peer_thinks_lower"],
@@ -516,12 +543,54 @@ class Run:
         cg = [l for l in g if "Connected to:" in l]
         cp = [l for l in p if "Connected to:" in l]
         self.check("both_sides_connected", cg and cp, "guest: %s | POSIX: %s" % (cg[0] if cg else "none", cp[0] if cp else "none"))
+        if self.cfg.get("game") == "end":
+            self.analyse_end(g, p)
+            return
         if self.cfg.get("game"):
             self.analyse_game(g, p)
             return
         shots = [n for n in ("E2E_BT_MENU", "E2E_BT_LOBBY", "E2E_BT_LOBBY2", "E2E_BT_LOBBY3")
                  if os.path.exists(os.path.join(self.shots, n + ".png"))]
         self.check("guest_lobby_screenshots", len(shots) == 4, "saved: %s (the lobby text is drawn by BomberTalk's own renderer, so the screenshots are for a human)" % ", ".join(shots))
+
+    def analyse_end(self, g, p):
+        """R6: the round ends (P0, the POSIX build, stands in its own blast; it is the lowest rank, so the
+        game-over authority) and both sides run the round-end path and return to the lobby."""
+        def first(lines, *needles):
+            return next((l for l in lines if all(n in l for n in needles)), None)
+        def n(lines, needle):
+            return sum(1 for l in lines if needle in l)
+        self.check("guest_sends_game_start", first(g, "TX game start: 2 players"), first(g, "TX game start") or "no 'TX game start'")
+        self.check("both_in_game", first(g, "Game started: 2 players, local=1") and first(p, "Game started: 2 players, local=0"),
+                   "guest: %s | POSIX: %s" % (first(g, "Game started"), first(p, "Game started")))
+        self.check("posix_bomb_placed", first(p, "TX bomb placed") and first(g, "RX bomb placed P0 (1,1)"),
+                   "POSIX: %s | guest: %s" % (first(p, "TX bomb placed"), first(g, "RX bomb placed P0")))
+        # authority = the POSIX build (rank 0): it detects, sends MSG_GAME_OVER (winner 1 = guest), ends
+        self.check("posix_authority_game_over", first(p, "Game over!", "Winner: 1") and first(p, "Game over authority: sending MSG_GAME_OVER")
+                   and first(p, "TX game over: winner=1"),
+                   "POSIX: %s | %s | %s" % (first(p, "Game over!"), first(p, "Game over authority"), first(p, "TX game over")))
+        # non-authority = the guest: either its own detection (then MSG_GAME_OVER ends it) or just the message
+        self.check("guest_game_over", first(g, "Game over"), "guest: %s" % (first(g, "Game over (remote)") or first(g, "Game over")))
+        self.check("guest_winner_is_guest", first(g, "winner=1") or first(g, "Winner: 1"),
+                   first(g, "winner=1") or first(g, "Winner: 1") or "no winner line")
+        self.check("guest_started_grace", first(g, "Game over: starting grace period"), first(g, "starting grace period") or "none")
+        self.check("posix_started_grace", first(p, "Game over: starting grace period"), first(p, "starting grace period") or "none")
+        self.check("both_grace_complete", first(g, "Grace period complete, disconnecting") and first(p, "Grace period complete, disconnecting"),
+                   "guest: %s | POSIX: %s" % (first(g, "Grace period complete"), first(p, "Grace period complete")))
+        self.check("both_back_to_lobby", first(g, "GAME -> LOBBY") and first(p, "GAME -> LOBBY") and n(g, "Lobby entered") >= 2 and n(p, "Lobby entered") >= 2,
+                   "guest: %s (Lobby entered x%d) | POSIX: %s (x%d)" % (first(g, "GAME -> LOBBY"), n(g, "Lobby entered"), first(p, "GAME -> LOBBY"), n(p, "Lobby entered")))
+        # the round end must come after the game start and after the bomb, on each side
+        order = lambda L: [i for i, l in enumerate(L) if any(k in l for k in ("Game started:", "Game over", "Grace period complete", "GAME -> LOBBY"))]
+        for who, L in (("guest", g), ("posix", p)):
+            seq = [k for l in L for k in ("Game started:", "Game over", "Grace period complete", "GAME -> LOBBY") if k in l]
+            self.check(who + "_round_end_order", seq.index("Game started:") < seq.index("Game over") < seq.index("Grace period complete") < max(i for i, k in enumerate(seq) if k == "GAME -> LOBBY"),
+                       "%s sequence: %s" % (who, " > ".join(dict.fromkeys(seq))))
+        bad = lambda L: first(L, "Game over failsafe:") or first(L, "Game over timeout")
+        self.check("no_failsafe_or_timeout", not bad(g) and not bad(p),
+                   "no 'Game over failsafe:'/'Game over timeout' warnings (the normal authority path was taken); guest: %s | POSIX: %s"
+                   % (bad(g), bad(p)))
+        shots = [x for x in ("E2E_GAME_1", "E2E_END_1", "E2E_END_2", "E2E_END_3") if os.path.exists(os.path.join(self.shots, x + ".png"))]
+        self.check("guest_end_screenshots", len(shots) == 4, "saved: %s" % ", ".join(shots))
 
     def analyse_game(self, g, p):
         """R5: the game started on both sides and each side saw the other's movement and bomb.
