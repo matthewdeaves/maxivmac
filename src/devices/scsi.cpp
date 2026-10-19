@@ -8,6 +8,7 @@
 #include "core/common.h"
 
 #include "devices/scsi.h"
+#include "devices/scsi_addr.h"
 
 static Ncr5380::Lines makeLines()
 {
@@ -27,16 +28,16 @@ void SCSIDevice::reset()
 
 uint32_t SCSIDevice::access(uint32_t Data, bool WriteMem, uint32_t addr)
 {
-	if (addr < 8)
+	/* addr: bits 0-2 register number, bit 3 pseudo-DMA /DACK (A9). */
+	const uint8_t reg = addr & 7;
+	const bool dack = (addr & scsi_addr::kDackBit) != 0;
+	if (WriteMem)
 	{
-		if (WriteMem)
-		{
-			bus_.write(static_cast<uint8_t>(addr), static_cast<uint8_t>(Data), false);
-		}
-		else
-		{
-			Data = bus_.read(static_cast<uint8_t>(addr), false);
-		}
+		bus_.write(reg, static_cast<uint8_t>(Data), dack);
+	}
+	else
+	{
+		Data = bus_.read(reg, dack);
 	}
 	return Data;
 }
