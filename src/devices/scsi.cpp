@@ -21,6 +21,18 @@ static Ncr5380::Lines makeLines()
 
 SCSIDevice::SCSIDevice() : bus_(makeLines()) {}
 
+void SCSIDevice::attachTarget(int id, std::unique_ptr<scsi::ScsiTarget> target)
+{
+	if (id < 0 || id > 6) return;
+	bus_.attach(id, target.get());
+	targets_[id] = std::move(target);
+}
+
+scsi::ScsiTarget *SCSIDevice::target(int id) const
+{
+	return (id < 0 || id > 6) ? nullptr : targets_[id].get();
+}
+
 void SCSIDevice::reset()
 {
 	bus_.reset();
