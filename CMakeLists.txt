@@ -121,6 +121,7 @@ set(MINIVMAC_SOURCES
     src/devices/rtc.cpp
     src/devices/rom.cpp
     src/devices/scsi.cpp
+    src/devices/ncr5380.cpp
     src/devices/sony.cpp
     src/devices/screen.cpp
     src/devices/video.cpp
@@ -423,6 +424,8 @@ add_executable(tests
     test/test_clip_pict.cpp
     src/core/pict_convert.cpp
     test/test_stb_image_impl.cpp
+    src/devices/ncr5380.cpp
+    test/test_ncr5380.cpp
 )
 target_include_directories(tests PRIVATE "${CMAKE_SOURCE_DIR}/src" "${CMAKE_SOURCE_DIR}/libs" "${CMAKE_SOURCE_DIR}/libs/stb" "${CMAKE_SOURCE_DIR}/tools/icon_extract")
 target_compile_options(tests PRIVATE -Wall -Wextra -Werror -UNDEBUG)
