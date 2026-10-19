@@ -101,6 +101,8 @@ set(MINIVMAC_SOURCES
     src/debugger/expr.cpp
     src/debugger/bp_text.cpp
     src/debugger/text_history.cpp
+    src/debugger/script_cond.cpp
+    src/debugger/script_tokens.cpp
     src/debugger/bp_power.cpp
     src/debugger/bp_screen.cpp
     src/debugger/cmd_script.cpp
@@ -443,6 +445,7 @@ add_executable(tests
     src/debugger/script_mouse.cpp
     src/debugger/script_paths.cpp
     src/debugger/text_history.cpp
+    src/debugger/script_tokens.cpp
     test/test_script_mouse.cpp
     test/test_script_text.cpp
     test/test_script_paths.cpp

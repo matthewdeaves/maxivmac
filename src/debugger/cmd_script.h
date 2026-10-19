@@ -2,6 +2,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 using ScaledCycleCount = uint64_t;
@@ -20,6 +21,10 @@ uint64_t ScriptUnitsPerSecond();
 // `log "message"`: print the message with the emulated time.
 struct Token;
 void ScriptLogMessage(class Debugger &dbg, const std::vector<Token> &args);
+
+// Failure messages name the failing command; a text handler running outside
+// any script line sets this (empty = use the script line being executed).
+void ScriptSetOriginOverride(const std::string &origin);
 
 // Default timeout budget for wait commands, in scheduler units
 // (setting "default-timeout"; 0 = infinite).

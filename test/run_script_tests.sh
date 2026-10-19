@@ -149,6 +149,13 @@ expect "failed expect lists the recent text"        expect_fail.dbg     1 "recen
 expect "failed wait reports its line too"           must_timeout.dbg    1 "must_timeout.dbg:3: wait text" disk
 expect "fail reports its line and the recent text"  fail_context.dbg    1 "fail_context.dbg:3: fail" disk
 
+expect "if text takes the then branch"             if_text.dbg         0 "menu bar was drawn" disk
+expect "if text takes the else branch and can wait" if_text.dbg        0 "after the conditional wait" disk
+expect "on text handlers fire (once and repeating)" on_handler.dbg      0 "handler saw the File menu" disk
+expect "on text once fires"                         on_handler.dbg      0 "handler saw the welcome banner" disk
+expect "a failing handler names its on line"        on_fail.dbg         1 "on_fail.dbg:3" disk
+expect "a handler that would wait is rejected"      on_bad_wait.dbg     2 "cannot run from a handler"
+
 # `source` inside a script: a wait in the sourced file must not drop the lines
 # after it, nor the lines after the `source` itself.
 if [ -f "$DISK" ]; then

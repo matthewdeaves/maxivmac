@@ -38,7 +38,8 @@ the branch that found them.
 ### S4. Open gaps and not verified
 
 - `commands ... end` blocks read the console, not the script (exit 2 in
-  unattended mode).
+  unattended mode). Deliberately not changed: `on text` and `if text`
+  (S8) cover the script use.
 - A plain `wait text` still only sees text drawn after it was armed (by
   design, see S6); `wait text ... recent` reaches back.
 - Fixed `wait for` delays are fragile; synchronise on drawn text instead.
@@ -97,6 +98,25 @@ the branch that found them.
   `quoted` flag on tokenizer tokens. Tests: `expect_ok.dbg`,
   `expect_fail.dbg`, `fail_context.dbg`, `must_timeout.dbg` in
   `test/run_script_tests.sh`; `test/test_script_text.cpp` for the formatter.
+
+### S8. No way to branch, or to handle an optional dialog
+
+- **Symptom:** a script could not react: an optional alert ("Cannot open
+  MacTCP driver") either had to be waited for (and failed the run when it
+  did not appear) or was ignored (and wedged the next step). The documented
+  `break text ... commands ... end` reactive form does not work in script
+  files (S4) and, even from the prompt, stops the CPU at every match.
+- **Status:** fixed with two small commands instead of parsing `commands`
+  blocks out of script files: `if text "x" [recent [window]] then <cmd>
+  [else <cmd>]` tests the recent-text buffer once, and `on text "x" [once]
+  do <cmd>` registers a handler that runs on every matching draw without
+  stopping the guest. Handlers may only run commands that do not resume the
+  CPU (an allow list, checked when the handler is set up). Limits: `if`
+  has one level (no nested `else`), the condition is text only (no screen or
+  memory conditions), and `on` handlers are not removed by `delete`; use
+  `on clear`. Not tried against a real guest alert; the guest tests use the
+  Finder's menu text. Tests: `if_text.dbg`, `on_handler.dbg`, `on_fail.dbg`,
+  `on_bad_wait.dbg`; token helpers in `test/test_script_text.cpp`.
 
 ## 2026-10: found during feat/scsi-bus
 

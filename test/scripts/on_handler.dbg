@@ -1,0 +1,13 @@
+# on text ... do ...: reactive handlers, here only logging.
+set default-timeout 120s
+on text "Welcome to Macintosh" once do log "handler saw the welcome banner"
+on text "Eject" do log "handler saw the File menu"
+on list
+wait text "Special"
+wait for 3s
+mousedown 52 9
+wait text "Eject"
+wait for 200ms
+mouseup
+on clear
+on list

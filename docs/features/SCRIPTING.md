@@ -293,6 +293,60 @@ Quote the message: `log` with an unquoted first argument is the older
 command that shows the guest's debug log (`log 20`, `log grep x`,
 `log file path`).
 
+### if
+
+```
+if text "pattern" [recent [window]] then <command> [else <command>]
+```
+
+Branch on what the guest drew lately (the [recent-text](#recent-text)
+buffer; the look-back window defaults to 5 s of emulated time).  The `then`
+command runs when a string containing the pattern was drawn in the window,
+otherwise the `else` command (if there is one).  The command is any single
+script command, including `wait`: the rest of the script carries on after it.
+`then` and `else` are keywords only when unquoted, and there is one level: an
+`else` always belongs to the nearest `if` on the line.
+
+```
+# MacTCP may or may not complain; either way carry on
+click 345 306 hold 300ms
+wait for 2s
+if text "Cannot open MacTCP driver" then click button "OK"
+```
+
+### on
+
+```
+on text "pattern" [once] do <command>
+on list
+on clear
+```
+
+A reactive handler: whenever the guest draws text containing the pattern,
+run `<command>`, no matter which line the script is on or what it is waiting
+for.  This is the scripted form of "dismiss that alert if it ever shows up".
+`once` removes the handler after it first fires; without it a dialog that is
+redrawn runs the command again, so prefer `once` for key presses.
+
+The command runs while the guest is in the middle of drawing, so it must not
+resume the CPU or wait: `key`, `type`, `click` (including `click button`, which
+reads the dialog being drawn), `drag`, `move`, `mousedown`, `mouseup`,
+`clearkeys`, `screenshot`, `log`, `fail`, `exit`, `launch`, `exittoshell`,
+`shutdown`, `clear`, `showtext` are accepted; anything else is rejected when
+the handler is set up (exit status 2).  A `fail` in a handler reports
+`at on text "..." (script:line)`.
+
+```
+on text "Replace existing" once do key return
+on text "Application has unexpectedly quit" do fail "guest crashed"
+```
+
+`on list` shows the handlers, `on clear` removes them all.
+
+> `commands ... end` blocks still read the console, not the script (exit
+> status 2 in unattended mode).  `on` and `if` are the script-file
+> replacements for the breakpoint-reactive uses (`ontext`).
+
 ### timeout
 
 ```
@@ -516,12 +570,13 @@ inspect, you continue, and the script picks up where it left off.
 Because `break text` and `break screen` are regular breakpoints, all
 existing features work.
 
-> **Not yet working in script files:** the `commands ... end` blocks in
+> **Not working in script files:** the `commands ... end` blocks in
 > the examples below read their command list from the interactive
 > console, not from the `.dbg` file.  In unattended script mode a
 > `commands` line is rejected with exit status 2 rather than silently
 > running the following lines immediately.  Use them from the interactive
-> prompt (`--debugger`) for now.
+> prompt (`--debugger`), and in script files use [`on`](#on) and
+> [`if`](#if) instead.
 
 ```
 # Persistent text breakpoint with auto-commands (≈ "ontext")

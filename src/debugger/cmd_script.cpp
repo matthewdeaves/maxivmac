@@ -49,8 +49,16 @@ static double EmuSeconds(uint64_t units)
 }
 
 /* "file:line: command" of the script line being executed, for failure messages. */
+static std::string s_originOverride;
+
+void ScriptSetOriginOverride(const std::string &origin)
+{
+	s_originOverride = origin;
+}
+
 static std::string CurrentOrigin(Debugger &dbg)
 {
+	if (!s_originOverride.empty()) return s_originOverride;
 	const ScriptLine *l = dbg.currentScriptLine();
 	if (!l) return "(typed at the prompt)";
 	size_t b = l->text.find_first_not_of(" \t");

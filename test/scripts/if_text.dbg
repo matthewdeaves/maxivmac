@@ -1,0 +1,10 @@
+# if text ... then ... else ...: branch on what the guest drew recently.
+set default-timeout 120s
+wait text "Special"
+wait for 200ms
+if text "File" then log "menu bar was drawn" else fail "no menu bar"
+if text "No such text" then fail "text that was never drawn" else log "absent text not seen"
+if text "File" recent 100ms then fail "window ignored" else log "outside the window"
+# the chosen command may itself wait; the script goes on after it
+if text "No such text" then fail "x" else wait for 100ms
+log "after the conditional wait"

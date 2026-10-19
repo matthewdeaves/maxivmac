@@ -416,7 +416,8 @@ void CmdCommands(Debugger &dbg, const std::vector<Token> &args)
 	{
 		/* The command list is read from the console, not from the script, so
 		   the following script lines would run immediately instead. */
-		dbg.io().write("FAIL: 'commands' blocks are not supported in unattended scripts\n");
+		dbg.io().write("FAIL: 'commands' blocks are not supported in unattended scripts "
+					   "(use 'on text \"x\" do <cmd>' or 'if text \"x\" then <cmd>')\n");
 		std::exit(2);
 	}
 

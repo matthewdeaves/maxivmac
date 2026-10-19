@@ -5,6 +5,7 @@
 #include <doctest/doctest.h>
 #include "debugger/text_history.h"
 #include "debugger/cmd_parser.h"
+#include "debugger/script_cond.h"
 
 TEST_CASE("text history: find returns the newest match not older than 'since'")
 {
@@ -92,4 +93,34 @@ TEST_CASE("tokenizer: quoted words are marked, so `log \"file\"` is a message")
 	auto u = Tokenize("log file");
 	REQUIRE(u.size() >= 2);
 	CHECK_FALSE(u[1].quoted);
+}
+
+TEST_CASE("if/on: splitting a command line at unquoted then/else")
+{
+	auto t = Tokenize("text \"x\" then key return else log \"then\"");
+	size_t th = FindKeyword(t, 0, "then");
+	REQUIRE(th == 2);
+	size_t el = FindKeyword(t, th + 1, "else");
+	REQUIRE(el != std::string::npos);
+	auto a = SliceTokens(t, th + 1, el);
+	REQUIRE(a.size() == 3); // key, return, End
+	CHECK(a[0].isWord("key"));
+	CHECK(a[2].isEnd());
+	auto b = SliceTokens(t, el + 1, t.size());
+	REQUIRE(b.size() == 3);
+	CHECK(b[0].isWord("log"));
+	CHECK(b[1].text == "then"); // the quoted "then" is an argument, not a keyword
+	CHECK(FindKeyword(b, 0, "then") == std::string::npos);
+}
+
+TEST_CASE("on: only commands that do not resume the guest may run in a handler")
+{
+	CHECK(ReactiveCommandAllowed("key"));
+	CHECK(ReactiveCommandAllowed("click"));
+	CHECK(ReactiveCommandAllowed("log"));
+	CHECK_FALSE(ReactiveCommandAllowed("wait"));
+	CHECK_FALSE(ReactiveCommandAllowed("continue"));
+	CHECK_FALSE(ReactiveCommandAllowed("expect"));
+	CHECK_FALSE(ReactiveCommandAllowed("source"));
+	CHECK_FALSE(ReactiveCommandAllowed("if"));
 }

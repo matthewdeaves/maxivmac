@@ -1,0 +1,2 @@
+# a handler may not wait: rejected when it is set up (exit 2)
+on text "Special" do wait for 1s

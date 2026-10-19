@@ -7,6 +7,7 @@
 #include "debugger/debugger.h"
 #include "debugger/dbg_io.h"
 #include "debugger/text_history.h"
+#include "debugger/script_cond.h"
 #include "core/machine.h"
 #include "core/ict_scheduler.h"
 
@@ -39,6 +40,9 @@ void ScriptCaptureText(std::string_view utf8Text, std::string_view trapName)
 	if (s_showText)
 		dbg->io().write("[text] %.*s: \"%.*s\"\n", static_cast<int>(trapName.size()),
 						trapName.data(), static_cast<int>(utf8Text.size()), utf8Text.data());
+
+	// Reactive handlers (`on text ... do ...`)
+	ScriptRunTextHandlers(utf8Text);
 
 	// Check all text breakpoints
 	auto &bps = dbg->breakpoints();

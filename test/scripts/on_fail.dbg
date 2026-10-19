@@ -1,0 +1,5 @@
+# a failing handler reports where it was set up
+set default-timeout 120s
+on text "Special" do fail "from a handler"
+wait text "Trash"
+wait for 1s

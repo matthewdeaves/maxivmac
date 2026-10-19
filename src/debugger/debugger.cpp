@@ -67,6 +67,8 @@ void CmdFail(Debugger &dbg, const std::vector<Token> &args);
 void CmdTimeout(Debugger &dbg, const std::vector<Token> &args);
 void CmdClear(Debugger &dbg, const std::vector<Token> &args);
 void CmdExpect(Debugger &dbg, const std::vector<Token> &args);
+void CmdIf(Debugger &dbg, const std::vector<Token> &args);
+void CmdOn(Debugger &dbg, const std::vector<Token> &args);
 void CmdDrag(Debugger &dbg, const std::vector<Token> &args);
 void CmdMove(Debugger &dbg, const std::vector<Token> &args);
 void CmdMouseDown(Debugger &dbg, const std::vector<Token> &args);
@@ -227,6 +229,19 @@ static CmdEntry s_commands[] = {
 	 "expect screen \"ref.png\" [timeout] [pct]\n"
 	 "  Like 'wait', but when the timeout expires print 'EXPECT FAILED', the script\n"
 	 "  file:line and the text the guest drew last, save timeout-screenshot.png and exit 1.\n",
+	 "Scripting"},
+	{"if", "", CmdIf, "Run a command depending on recently drawn text",
+	 "if text \"pattern\" [recent [window]] then <command> [else <command>]\n"
+	 "  Look at the text the guest drew in the last <window> (default 5s) and run the\n"
+	 "  'then' command if it is there, else the 'else' command (if any).  The command may\n"
+	 "  be a wait; the rest of the script resumes after it.  One level: no nested else.\n",
+	 "Scripting"},
+	{"on", "", CmdOn, "Run a command whenever text is drawn",
+	 "on text \"pattern\" [once] do <command>\n"
+	 "  Whenever the guest draws text containing the pattern run <command> (key, type,\n"
+	 "  click, drag, move, mousedown, mouseup, screenshot, log, fail, exit; nothing that\n"
+	 "  waits).  'once' removes the handler after it first fires.\n"
+	 "on list\n  Show the handlers.\non clear\n  Remove them all.\n",
 	 "Scripting"},
 	{"clear", "", CmdClear, "Forget recently drawn text",
 	 "clear text\n  Empty the buffer of recently drawn text, so 'wait text ... recent' only sees\n"
