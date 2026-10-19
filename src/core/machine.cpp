@@ -21,6 +21,7 @@
 #include "devices/via2.h"
 #include "devices/scc.h"
 #include "devices/scsi.h"
+#include "devices/scsi_addr.h"
 #include "devices/iwm.h"
 #include "devices/asc.h"
 #include "devices/sony.h"
@@ -1659,7 +1660,8 @@ uint32_t MMDV_Access(ATTEntryPtr p, uint32_t data, bool writeMem, bool byteSize,
 										   "access SCSI nonstandard address");
 					}
 				}
-				data = p->device->access(data, writeMem, (addr >> 4) & 0x07);
+				data = p->device->access(data, writeMem,
+										 scsi_addr::decode(addr, g_rig->config().isIIFamily()));
 			}
 
 			break;
