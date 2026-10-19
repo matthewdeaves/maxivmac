@@ -185,8 +185,17 @@ TEST_CASE("cli: --net-redir and its former name --slip-redir feed the same list"
 {
 	LaunchConfig lc = parseArgs({"--net-redir=tcp:8080:10.0.2.15:80", "--slip-redir=udp:53:10.0.2.15:53"});
 	REQUIRE(lc.netRedirs.size() == 2);
-	CHECK(lc.netRedirs[0] == "tcp:8080:10.0.2.15:80");
-	CHECK(lc.netRedirs[1] == "udp:53:10.0.2.15:53");
+	CHECK(lc.netRedirs[0] == "tcp:8080:10.0.2.15:80");		   // loopback only
+	CHECK(lc.netRedirs[1] == "udp:0.0.0.0:53:10.0.2.15:53");	   // --slip-redir: upstream's all interfaces
+}
+
+TEST_CASE("config: --speed accepts upstream's 255 and max")
+{
+	CHECK(parseArgs({"--speed=255"}).speed == 255);
+	CHECK(parseArgs({"--speed", "255"}).speed == 255);
+	CHECK(parseArgs({"--speed=max"}).speed == 255);
+	CHECK(parseArgs({"--speed=6"}).speed == -1);
+	CHECK(parseArgs({"--speed=254"}).speed == -1);
 }
 
 TEST_CASE("config: --speed and --scale accept only in-range whole numbers")

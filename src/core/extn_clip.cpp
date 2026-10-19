@@ -1,4 +1,5 @@
 #include "core/extn_clip.h"
+#include "core/guest_log_format.h"
 #include "core/extn_clip_pict.h"
 #include "core/diag.h"
 #include "debugger/debugger.h"
@@ -109,102 +110,12 @@ static std::string readGuestPascalString(uint32_t addr)
 	return s;
 }
 
-/*
-	Format a guest printf-style string with up to 6 long args.
-	Supported: %lx (hex), %ld (decimal), %lu (unsigned decimal),
-			   %s (guest string pointer), %% (literal %).
-*/
+/* Format a guest printf-style string (see core/guest_log_format.h). */
 std::string guestFormatLog(uint32_t fmtAddr, uint32_t args[7])
 {
-	std::string fmt = readGuestString(fmtAddr);
-	std::string out;
-	out.reserve(fmt.size() * 2);
-	int argIdx = 0;
-	char numbuf[20];
-
-	for (size_t i = 0; i < fmt.size(); i++)
-	{
-		if (fmt[i] != '%')
-		{
-			out.push_back(fmt[i]);
-			continue;
-		}
-		/* look at next char(s) */
-		i++;
-		if (i >= fmt.size()) break;
-
-		if (fmt[i] == '%')
-		{
-			out.push_back('%');
-			continue;
-		}
-
-		/* consume optional flags/width/precision (e.g. "02", "-8") */
-		char fmtspec[16];
-		int fpos = 0;
-		int digitRun = 0; /* guest-controlled: "%.2000000000x" stalls the host for seconds */
-		fmtspec[fpos++] = '%';
-		while (i < fmt.size() &&
-			   (fmt[i] == '-' || fmt[i] == '+' || fmt[i] == ' ' || fmt[i] == '0' || fmt[i] == '#' ||
-				(fmt[i] >= '1' && fmt[i] <= '9') || fmt[i] == '.'))
-		{
-			const bool isDigit = fmt[i] >= '0' && fmt[i] <= '9';
-			digitRun = isDigit ? digitRun + 1 : 0;
-			if (fpos < 12 && digitRun <= 2) fmtspec[fpos++] = fmt[i];
-			i++;
-		}
-		if (i >= fmt.size()) break;
-
-		/* consume optional 'l' prefix */
-		if (fmt[i] == 'l' && i + 1 < fmt.size()) i++;
-
-		if (argIdx > 5)
-		{
-			out += "<?>";
-			continue;
-		}
-		uint32_t val = args[argIdx + 1]; /* args[1..6] = p1..p6 */
-		argIdx++;
-
-		switch (fmt[i])
-		{
-			case 'x':
-				fmtspec[fpos++] = 'x';
-				fmtspec[fpos] = '\0';
-				snprintf(numbuf, sizeof(numbuf), fmtspec, val);
-				out += numbuf;
-				break;
-			case 'X':
-				fmtspec[fpos++] = 'X';
-				fmtspec[fpos] = '\0';
-				snprintf(numbuf, sizeof(numbuf), fmtspec, val);
-				out += numbuf;
-				break;
-			case 'd':
-				fmtspec[fpos++] = 'd';
-				fmtspec[fpos] = '\0';
-				snprintf(numbuf, sizeof(numbuf), fmtspec, static_cast<int32_t>(val));
-				out += numbuf;
-				break;
-			case 'u':
-				fmtspec[fpos++] = 'u';
-				fmtspec[fpos] = '\0';
-				snprintf(numbuf, sizeof(numbuf), fmtspec, val);
-				out += numbuf;
-				break;
-			case 's':
-				out += readGuestString(val);
-				break;
-			case 'S':
-				out += readGuestPascalString(val);
-				break;
-			default:
-				out.push_back('%');
-				out.push_back(fmt[i]);
-				break;
-		}
-	}
-	return out;
+	return formatGuestLog(readGuestString(fmtAddr), args,
+						  {[](uint32_t a) { return readGuestString(a); },
+						   [](uint32_t a) { return readGuestPascalString(a); }});
 }
 
 static void refreshCache()

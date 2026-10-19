@@ -49,6 +49,7 @@ set(MINIVMAC_SOURCES
     src/core/rig.cpp
     src/core/machine.cpp
     src/core/extn_clip.cpp
+    src/core/guest_log_format.cpp
     src/core/pict_convert.cpp
     src/core/extn_clip_pict.cpp
     src/core/extn_extfs.cpp
@@ -398,17 +399,22 @@ if(MAXIVMAC_ETHHUB AND UNIX)
     add_executable(ethhub tools/ethhub/ethhub.c)
     set_target_properties(ethhub PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
     target_compile_options(ethhub PRIVATE -Wall -Wextra -Werror)
-    # Sanitized copy used by the ctest run
-    add_executable(ethhub-asan tools/ethhub/ethhub.c)
+    # Sanitized copy used by the ctest run.  Not part of the default build, so a
+    # host without a sanitizer runtime still builds; the ethhub test builds it on demand.
+    add_executable(ethhub-asan EXCLUDE_FROM_ALL tools/ethhub/ethhub.c)
     set_target_properties(ethhub-asan PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
     target_compile_options(ethhub-asan PRIVATE -Wall -Wextra -Werror -g -O1
         -fsanitize=address,undefined -fno-sanitize-recover=undefined)
     target_link_options(ethhub-asan PRIVATE -fsanitize=address,undefined)
     find_package(Python3 COMPONENTS Interpreter)
     if(Python3_Interpreter_FOUND)
+        add_test(NAME ethhub_asan_build
+            COMMAND "${CMAKE_COMMAND}" --build "${CMAKE_BINARY_DIR}" --target ethhub-asan --config $<CONFIG>)
+        set_tests_properties(ethhub_asan_build PROPERTIES FIXTURES_SETUP ethhub_asan RESOURCE_LOCK ethhub_asan_build)
         add_test(NAME ethhub
             COMMAND "${Python3_EXECUTABLE}" -I "${CMAKE_SOURCE_DIR}/tools/ethhub/test/test_ethhub.py"
                     "$<TARGET_FILE:ethhub-asan>")
+        set_tests_properties(ethhub PROPERTIES FIXTURES_REQUIRED ethhub_asan)
     endif()
     # EthHub backend against the real hub: three backends, unicast + broadcast.
     if(Python3_Interpreter_FOUND)
@@ -498,6 +504,8 @@ add_executable(tests
     test/test_scsi_factory.cpp
     test/test_eth_spec.cpp
     test/test_eth_latency.cpp
+    src/core/guest_log_format.cpp
+    test/test_guest_log_format.cpp
 )
 target_include_directories(tests PRIVATE "${CMAKE_SOURCE_DIR}/src" "${CMAKE_SOURCE_DIR}/libs" "${CMAKE_SOURCE_DIR}/libs/stb" "${CMAKE_SOURCE_DIR}/tools/icon_extract")
 target_compile_options(tests PRIVATE -Wall -Wextra -Werror -UNDEBUG)

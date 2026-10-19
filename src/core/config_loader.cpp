@@ -9,6 +9,7 @@
 #include "core/diag.h"
 #include "util/data_path.h"
 #include "config/mac_file.h"
+#include "devices/eth_spec.h"
 #include <algorithm>
 #include <cassert>
 #include <cerrno>
@@ -111,6 +112,17 @@ static int parseIntOption(const char *opt, const char *text, int lo, int hi, int
 	return static_cast<int>(v);
 }
 
+// --speed: 0..5 (1x..32x), or 255 / "max" for unthrottled (as upstream accepted).
+static int parseSpeedOption(const char *text)
+{
+	if (strcmp(text, "max") == 0) return 255;
+	char *end = nullptr;
+	errno = 0;
+	long v = strtol(text, &end, 10);
+	if (end != text && *end == '\0' && errno != ERANGE && v == 255) return 255;
+	return parseIntOption("--speed", text, 0, 5, -1);
+}
+
 // Parse screen spec "WxHxD" (e.g. "640x480x8")
 static bool parseScreenSpec(const char *s, uint16_t &w, uint16_t &h, uint8_t &d)
 {
@@ -164,12 +176,14 @@ void PrintUsage(const char *progname)
 			"Options:\n"
 			"  --model=MODEL    Mac model (= ROM base name): MacPlus, MacSE, MacII, MacIIx,\n"
 			"                   Classic, PB100, SEFDHD, Mac128K, Mac512Ke, MacPlusKanji,\n"
-			"                   Twig43, Twiggy  (default: MacII)\n"
+			"                   Twig43, Twiggy  (default: MacII; --headless has no default and\n"
+			"                   needs --model or a .mac file)\n"
 			"  --rom=PATH       Path to ROM file (auto-detected from model if omitted)\n"
 			"  --romdir=DIR     Directory to search for ROM files\n"
 			"  --ram=SIZE       RAM size: 1M, 2M, 4M, 8M (default: model-specific)\n"
 			"  --screen=WxHxD   Screen size: 512x342x1, 640x480x8, etc.\n"
-			"  --speed=N        Emulation speed: 0 (1x), 1 (2x), 2 (4x), 3 (8x), 4 (16x), 5 (32x)\n"
+			"  --speed=N        Emulation speed: 0 (1x), 1 (2x), 2 (4x), 3 (8x), 4 (16x), 5 (32x),\n"
+			"                   or max / 255 (unthrottled)\n"
 			"  --scale=N        Window scale factor (default: 2)\n"
 			"  --fullscreen     Start in fullscreen mode\n"
 			"  --headless       Run without GUI (for testing/automation)\n"
@@ -189,6 +203,7 @@ void PrintUsage(const char *progname)
 			"  --serial-a=MODE  Modem port backend: loopback, file:tx=PATH[,rx=PATH], pty, slip\n"
 			"  --serial-b=MODE  Printer port backend (same modes as --serial-a)\n"
 			"  --scsiN=TYPE     Attach a SCSI target at ID N (0-6): daynaport[,multiframe], none\n"
+			"                   (multiframe is EXPERIMENTAL: not verified against real software)\n"
 			"                   (compact Macs only; refused on the Mac II family)\n"
 			"  --eth=SPEC       Ethernet backend for a DaynaPORT: slirp[,hostfwd=tcp:[HOSTIP]:HOSTPORT-GUESTIP:GUESTPORT],\n"
 			"                   hub:HOST:PORT (join an ethhub virtual LAN over UDP), none\n"
@@ -329,7 +344,7 @@ LaunchConfig ParseCommandLine(int argc, char *argv[])
 		}
 		if (strncmp(arg, "--speed=", 8) == 0)
 		{
-			lc.speed = parseIntOption("--speed", arg + 8, 0, 5, -1);
+			lc.speed = parseSpeedOption(arg + 8);
 			continue;
 		}
 		if (strncmp(arg, "--scale=", 8) == 0)
@@ -480,7 +495,7 @@ LaunchConfig ParseCommandLine(int argc, char *argv[])
 		}
 		if (strcmp(arg, "--speed") == 0 && i + 1 < argc)
 		{
-			lc.speed = parseIntOption("--speed", argv[i + 1], 0, 5, -1);
+			lc.speed = parseSpeedOption(argv[i + 1]);
 			++i;
 			continue;
 		}
