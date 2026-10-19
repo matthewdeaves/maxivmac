@@ -24,6 +24,8 @@
 #                  scripts' fixed waits assume it: at --speed=0 the guest is too slow for them)
 #   E2E_CPUS E2E_MEMORY E2E_PIDS E2E_TIMEOUT (per-container hard limit, seconds)
 #   E2E_REPEAT     run each rung N times (default 1); results in <out>/<rung>-<n>/
+#   E2E_EXPECT_FAIL=1  negative control (e.g. E2E_PEER=old r3): the run is expected to FAIL;
+#                  it is reported XFAIL and exits 0, a pass is XPASS and exits 1
 #   MAXIVMAC_HFSUTILS  directory with hmount/hcopy (host-side PT_Log cross-check)
 #
 # Exit: 0 all rungs pass, 1 a rung failed, 77 skipped (an input or docker is missing).
@@ -186,9 +188,20 @@ for rung in "${RUNGS[@]}"; do
             st=FAIL
         fi
         [ "$rc" -eq 0 ] || st=FAIL
+        if [ "${E2E_EXPECT_FAIL:-0}" = 1 ]; then
+            if [ "$st" = FAIL ]; then st=XFAIL; else st=XPASS; fi
+            python3 - "$rdir/summary.json" "$st" <<'PY'
+import json, sys
+p, st = sys.argv[1:3]
+s = json.load(open(p)); s["status"] = st; s["expected_failure"] = True
+json.dump(s, open(p, "w"), indent=2)
+PY
+            [ "$st" = XFAIL ] || rc_all=1
+        else
+            [ "$st" = PASS ] || rc_all=1
+        fi
         echo "   $label: $st"
         echo "$label $st" >> "$OUT/results.txt"
-        [ "$st" = PASS ] || rc_all=1
         n=$((n + 1))
     done
 done
@@ -201,7 +214,7 @@ for p in sorted(glob.glob(os.path.join(out, "*", "summary.json"))):
     runs[os.path.basename(os.path.dirname(p))] = {"status": s["status"], "wall_s": s.get("wall_s"),
         "failed_checks": [k for k, v in s["checks"].items() if not v["ok"]]}
 json.dump({"image": image, "wall_s": int(secs), "runs": runs,
-           "status": "PASS" if runs and all(r["status"] == "PASS" for r in runs.values()) else "FAIL"},
+           "status": "PASS" if runs and all(r["status"] in ("PASS", "XFAIL") for r in runs.values()) else "FAIL"},
           open(os.path.join(out, "summary.json"), "w"), indent=2)
 EOF
 cat "$OUT/summary.json"

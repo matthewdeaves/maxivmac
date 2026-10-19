@@ -31,6 +31,12 @@ RUNGS = {
                 what="MacTCP Ping -> container kernel over the hub; container ping -> guest"),
     "r2":  dict(guest="10.88.0.20/24", tap="10.88.0.10/24", peer="test_mesh", app="test_mesh",
                 what="PeerTalk discovery + one TCP connection + messages, guest 10.88.0.20/24, peer 10.88.0.10/24"),
+    # The guest is the lower address, so the guest is the designated initiator and can
+    # only dial after it discovered the peer by UDP broadcast: the proof that the guest
+    # hears the POSIX peer (in r2 the peer dials first and the guest may learn of it
+    # from the inbound connection).
+    "r2b": dict(guest="10.88.0.20/24", tap="10.88.0.30/24", peer="test_mesh", app="test_mesh",
+                what="as r2, but the guest is the initiator (peer 10.88.0.30/24): guest must discover the peer to dial"),
     # Both addresses are in 10.0.0.0/8 and differ before the last octet.  Read as
     # native integers, a little-endian peer ranks 10.0.2.25 above 10.88.0.20 (last
     # octet 25 > 20) while a big-endian Mac ranks it below (second octet 0 < 88):
@@ -151,7 +157,7 @@ class Run:
         folder = ("click 82 105 hold 200ms\nwait for 1s\nclick 82 105 hold 200ms\nwait for 6s\n"
                   'screenshot "n_folder"\n')
         if self.cfg["app"] == "ping":
-            s += 'screenshot "E2E_READY"\n# the container pings the guest now\nwait for 25s\n'
+            s += 'screenshot "E2E_READY"\n# the container pings the guest now\nwait for 200s\n'
             s += folder
             s += inc("launch").split('screenshot "n_folder"\n', 1)[1]   # MacTCP Ping (110,105)
             s += (inc("ping").replace("10.0.2.2", self.tap_ip)
@@ -168,7 +174,10 @@ class Run:
         return s
 
     def app_wait(self):
-        return 600
+        # Script time is counted in emulated CPU time, and the guest CPU runs 16x
+        # faster than its clock at the default --speed=4: the app's own 90 s window (and
+        # the up to 25 s barrier wait) therefore take about 90 * 16 script seconds.
+        return 3000
 
     # -- the rung ----------------------------------------------------------------
     def go(self):
@@ -297,7 +306,13 @@ class Run:
         self.facts.update(guest_lines=len(g), peer_lines=len(p))
         self.check("udp_capture_guest", len(g) > 0, "%d lines tagged @%s received over the hub on udp/%d" % (len(g), ga, DEBUG_PORT))
         disc_g = [l for l in g if "[DISC] " in l and "@ %s" % ta in l]
-        self.check("guest_discovers_posix", disc_g, disc_g[0] if disc_g else "no '[DISC] .. @ %s' from the guest" % ta)
+        conn_in = [l for l in g if "[CONN] " in l and "@ %s" % ta in l]
+        guest_dials = (socket.inet_aton(ga) < socket.inet_aton(ta))
+        if guest_dials:   # it cannot dial a peer it has not discovered
+            self.check("guest_discovers_posix", disc_g, disc_g[0] if disc_g else "no '[DISC] .. @ %s' from the guest" % ta)
+        else:
+            self.check("guest_knows_posix", disc_g or conn_in,
+                       (disc_g or conn_in or ["guest never saw the peer"])[0] + "  (the peer dials first: the guest may learn of it from the inbound connection; r2b proves UDP discovery on the guest)")
         disc_p = [l for l in (p + peer_log.splitlines()) if "[DISC] " in l and "@ %s" % ga in l]
         self.check("posix_discovers_guest", disc_p, disc_p[0] if disc_p else "no '[DISC] .. @ %s' from the peer" % ga)
 
@@ -348,8 +363,15 @@ class Run:
         live_p = [l for l in (p + peer_log.splitlines()) if "LIVE LINK" in l]
         self.check("guest_verdict_pass", any("*** PASS ***" in l for l in g),
                    "guest report: %s" % (live_g[0] if live_g else "no LIVE LINK line"))
-        self.check("peer_verdict_pass", any("*** PASS ***" in l for l in peer_log.splitlines()),
-                   "peer report: %s" % (live_p[0] if live_p else "no LIVE LINK line"))
+        # The peer's own final report comes after the guest has left (PT_Shutdown closes the
+        # link right after the guest's verdict), so judge the peer by its status lines while the
+        # link was up: connected=1 with a growing heartbeat count, and no DEAD LINK.
+        plines = peer_log.splitlines()
+        up = [l for l in plines if re.search(r"connected=1 ", l)]
+        dead = [l for l in plines if "DEAD LINK" in l]
+        self.check("peer_link_alive", up and hp >= 1 and not dead,
+                   "peer status lines with connected=1: %d, heartbeats received %d, DEAD LINK lines: %d%s"
+                   % (len(up), hp, len(dead), ("; " + live_p[0]) if live_p else ""))
 
     # -- result ---------------------------------------------------------------------
     def finish(self):
