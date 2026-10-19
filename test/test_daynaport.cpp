@@ -342,3 +342,45 @@ TEST_CASE("daynaport fix: a READ whose buffer is too small leaves the frame queu
 	CHECK(Bytes(b.begin() + 6, b.begin() + 206) == f);
 	CHECK(r.eth->queued() == 0);
 }
+
+TEST_CASE("daynaport fix: READ packs several frames and flags 'more' while frames follow")
+{
+	DnRig r;
+	r.enable();
+	for (uint8_t i = 1; i <= 3; i++) r.eth->inject(makeFrame(60, i));
+	// each record: 6 header + 60 frame + 4 FCS = 70 bytes
+	Bytes b = r.read(0x08, 1524, 0xC0, 3 * 70);
+	for (int i = 0; i < 3; i++)
+	{
+		const Bytes rec(b.begin() + i * 70, b.begin() + (i + 1) * 70);
+		CHECK(rec[0] == 0);
+		CHECK(rec[1] == 64);
+		CHECK(rec[5] == (i < 2 ? 0x10 : 0x00)); // last record: nothing more
+		CHECK(rec[6 + 20] == i + 1);
+	}
+	CHECK(r.eth->queued() == 0);
+}
+
+TEST_CASE("daynaport fix: frames that do not fit stay queued and the last record says 'more'")
+{
+	DnRig r;
+	r.enable();
+	for (uint8_t i = 1; i <= 3; i++) r.eth->inject(makeFrame(60, i));
+	Bytes b = r.read(0x08, 150, 0xC0, 2 * 70); // room for two records
+	CHECK(b[5] == 0x10);
+	CHECK(b[70 + 5] == 0x10); // third frame still waiting
+	CHECK(r.eth->queued() == 1);
+	b = r.read(0x08, 1524, 0xC0, 70);
+	CHECK(b[5] == 0x00);
+	CHECK(b[6 + 20] == 3);
+}
+
+TEST_CASE("daynaport fix: a single queued frame keeps the donor layout (flags zero)")
+{
+	DnRig r;
+	r.enable();
+	r.eth->inject(makeFrame(100, 9));
+	Bytes b = r.read(0x08, 1524, 0xC0, 6 + 100 + 4);
+	CHECK(b[1] == 104);
+	CHECK(Bytes(b.begin() + 2, b.begin() + 6) == Bytes(4, 0));
+}

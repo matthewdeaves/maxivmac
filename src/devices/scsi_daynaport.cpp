@@ -43,6 +43,9 @@ enum : uint8_t
 	kEnable = 0x0E,
 	kVendor80 = 0x80
 };
+constexpr size_t kReadHeader = 6; // size:2 + flags:4
+// Low byte of the flags word in a READ record header: more frames follow.
+constexpr uint8_t kMoreFlag = 0x10;
 constexpr uint8_t kIllegalRequest = 5;
 constexpr uint8_t kNotReady = 2;
 constexpr uint8_t kHardwareError = 4;
@@ -142,23 +145,36 @@ scsi::Step DaynaPortTarget::handle(uint8_t lun)
 		{
 			// The boot-time size-one probe must fail without a data phase.
 			if (size < 6) return error(kIllegalRequest);
-			size_t n = 0;
-			if (enabled_)
-				if (const size_t pk = eth_->peekSize())
+			// Pack as many whole records as fit, each [size:2][flags:4][frame+FCS].
+			// A frame that does not fit stays queued.  The "more" flag is set in
+			// a record's header when another frame follows it (in this transfer
+			// or still queued), so the driver knows to keep reading.
+			const size_t room = std::min(size, buf_.size());
+			size_t total = 0, last = 0;
+			while (enabled_)
+			{
+				const size_t pk = eth_->peekSize();
+				if (!pk) break;
+				// Ethernet minimum excludes FCS; backends may omit padding.
+				const size_t n = std::max<size_t>(pk, 60);
+				const size_t rec = kReadHeader + n + 4;
+				if (total + rec > room)
 				{
-					// Ethernet minimum excludes FCS; backends may omit padding.
-					n = std::max<size_t>(pk, 60);
-					// Check the room *before* dequeueing: a frame that does not
-					// fit stays queued rather than being lost.
-					if (n + 10 > size) return error(kIllegalRequest);
-					eth_->receive(std::span<uint8_t>(buf_.data() + 6, kEthMaxFrame));
-					const uint32_t crc = crc32(buf_.data() + 6, n);
-					for (int i = 0; i < 4; i++) buf_[6 + n + i] = uint8_t(crc >> (8 * i));
-					n += 4;
-					buf_[0] = uint8_t(n >> 8);
-					buf_[1] = uint8_t(n);
+					if (!total) return error(kIllegalRequest); // frame stays queued
+					break;
 				}
-			return dataIn(n + 6);
+				uint8_t *r = buf_.data() + total;
+				eth_->receive(std::span<uint8_t>(r + kReadHeader, pk));
+				const uint32_t crc = crc32(r + kReadHeader, n);
+				for (int i = 0; i < 4; i++) r[kReadHeader + n + i] = uint8_t(crc >> (8 * i));
+				r[0] = uint8_t((n + 4) >> 8);
+				r[1] = uint8_t(n + 4);
+				if (total) buf_[last + 5] |= kMoreFlag;
+				last = total;
+				total += rec;
+			}
+			if (total && eth_->peekSize()) buf_[last + 5] |= kMoreFlag;
+			return dataIn(total ? total : kReadHeader);
 		}
 		case kGetMac:
 			std::copy(mac_.begin(), mac_.end(), buf_.begin());
