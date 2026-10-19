@@ -1,0 +1,3 @@
+# An unknown command must abort an unattended script with status 2.
+frobnicate the widgets
+wait for 1s

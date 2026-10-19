@@ -8,6 +8,7 @@
 #include "debugger/settings.h"
 #include "debugger/duration.h"
 #include "debugger/script_mouse.h"
+#include "debugger/script_paths.h"
 
 #include "core/machine.h"
 #include "core/ict_scheduler.h"
@@ -253,7 +254,7 @@ void CmdFail(Debugger &dbg, const std::vector<Token> &args)
 	dbg.io().write("FAIL: %s\n", msg.c_str());
 
 	// Save a failure screenshot
-	SaveScreenshot("fail-screenshot.png");
+	SaveScreenshot(ScriptOutputPath("fail-screenshot.png"));
 
 	std::exit(1);
 }
@@ -281,7 +282,7 @@ void CheckScriptTimeouts()
 							static_cast<double>(ScriptUnitsPerSecond()),
 						bp.timeoutBudget);
 
-		SaveScreenshot("timeout-screenshot.png");
+		SaveScreenshot(ScriptOutputPath("timeout-screenshot.png"));
 
 		uint32_t bpId = bp.id;
 		dbg->deleteById(bpId);
@@ -295,7 +296,7 @@ void CmdType(Debugger &dbg, const std::vector<Token> &args)
 {
 	if (args.empty() || args[0].isEnd())
 	{
-		dbg.io().write("Usage: type \"text\"\n");
+		ScriptError(dbg, "Usage: type \"text\"");
 		return;
 	}
 
@@ -322,7 +323,7 @@ void CmdKey(Debugger &dbg, const std::vector<Token> &args)
 {
 	if (args.empty() || args[0].isEnd())
 	{
-		dbg.io().write("Usage: key <keyspec>  (e.g. cmd-S, return, cmd-shift-N)\n");
+		ScriptError(dbg, "Usage: key <keyspec>  (e.g. cmd-S, return, cmd-shift-N)");
 		return;
 	}
 
@@ -337,7 +338,7 @@ void CmdKey(Debugger &dbg, const std::vector<Token> &args)
 	KeySpec ks = ParseKeySpec(spec);
 	if (ks.keycode == 0xFF)
 	{
-		dbg.io().write("Error: cannot resolve key '%s'\n", spec.c_str());
+		ScriptError(dbg, ("Error: cannot resolve key '" + spec + "'").c_str());
 		return;
 	}
 

@@ -9,6 +9,7 @@
 #include "debugger/settings.h"
 #include "debugger/bp_text.h"
 #include "debugger/bp_screen.h"
+#include "debugger/script_paths.h"
 
 #include "core/machine.h"
 #include "core/ict_scheduler.h"
@@ -16,6 +17,7 @@
 
 #include <cinttypes>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 /* Parse a watchpoint value condition: "if val <op> <value>" */
@@ -410,6 +412,14 @@ void CmdCommands(Debugger &dbg, const std::vector<Token> &args)
 
 	uint32_t id = args[0].numValue;
 
+	if (dbg.scriptMode())
+	{
+		/* The command list is read from the console, not from the script, so
+		   the following script lines would run immediately instead. */
+		dbg.io().write("FAIL: 'commands' blocks are not supported in unattended scripts\n");
+		std::exit(2);
+	}
+
 	/* Find the breakpoint */
 	bool found = false;
 	for (auto &bp : const_cast<std::vector<Debugger::Breakpoint> &>(dbg.breakpoints()))
@@ -495,12 +505,15 @@ void CmdScreenshot(Debugger &dbg, const std::vector<Token> &args)
 	if (args.empty() || args[0].isEnd())
 	{
 		dbg.io().write("Usage: screenshot <filename>\n");
+		if (dbg.scriptMode()) std::exit(2);
 		return;
 	}
-	std::string path = args[0].text;
-	if (path.find('.') == std::string::npos) path += ".png";
+	std::string path = ScriptOutputPath(args[0].text);
 	if (SaveScreenshot(path))
 		dbg.io().write("Screenshot saved: %s\n", path.c_str());
 	else
+	{
 		dbg.io().write("Error: failed to save screenshot to '%s'\n", path.c_str());
+		if (dbg.scriptMode()) std::exit(1);
+	}
 }
