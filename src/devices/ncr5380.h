@@ -69,6 +69,7 @@ private:
 	void checkSelect();
 	void handleMessage(uint8_t m);
 	void maybeArbitrate();
+	void syncLines();
 
 	scsi::ScsiTarget *targets_[7] = {};
 	bool real_ = false;
@@ -77,6 +78,8 @@ private:
 	Phase phase_ = Phase::Free;
 	bool req_ = false, ackPending_ = false;
 	bool dmaActive_ = false;
+	bool irq_ = false, endDma_ = false, busyErr_ = false;
+	bool irqOut_ = false, drqOut_ = false; // last levels sent to Lines
 	int sel_ = -1;
 	uint8_t lun_ = 0;
 	bool identified_ = false;
