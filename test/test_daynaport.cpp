@@ -384,3 +384,28 @@ TEST_CASE("daynaport fix: a single queued frame keeps the donor layout (flags ze
 	CHECK(b[1] == 104);
 	CHECK(Bytes(b.begin() + 2, b.begin() + 6) == Bytes(4, 0));
 }
+
+TEST_CASE("daynaport fix: link down: TEST UNIT READY succeeds, READ returns no frames, WRITE is dropped")
+{
+	DnRig r;
+	r.enable();
+	r.eth->link = false;
+	r.eth->inject(makeFrame(60, 1)); // hidden while the link is down
+	r.command(0x00, 0, 0);
+	r.finish(0); // donor: NOT READY
+	CHECK(r.read(0x08, 1524, 0xC0, 6) == Bytes(6, 0)); // zero frames, not an error
+	r.command(0x0A, 60, 0);
+	r.output(makeFrame(60, 2), false);
+	r.finish(0);
+	CHECK(r.eth->sent.empty());
+	r.eth->link = true; // link comes up: the queued frame is still there
+	CHECK(r.read(0x08, 1524, 0xC0, 70).size() == 70);
+}
+
+TEST_CASE("daynaport fix: a missing link does not stop selection or INQUIRY")
+{
+	DnRig r;
+	r.eth->link = false;
+	CHECK(r.read(0x12, 37, 0, 37)[0] == 3);
+	CHECK(r.read(0x09, 6, 0, 18).size() == 18);
+}
