@@ -247,10 +247,16 @@ the guest — just enqueues a key-down/key-up pair into the input queue.
 
 #### Key timing
 
-Each key event has built-in timing: ~10ms press (key-down → key-up)
-followed by ~20ms pause before the next event.  Times are converted
-to cycles.  If the queue is empty, the first event is immediate;
-subsequent events are scheduled relative to the previous one.
+Events are queued in scheduler units (see [Time units](#time-units)):
+a key is held for 80,000 units (~0.16 ms emulated) and the next key
+follows 160,000 units after the previous one's press; `key` presses
+modifiers 10,000 units before the key and releases them 100,000 units
+after the press.  Guest software sees every transition as its own keyboard
+event, which is what typing needs (verified with `type` into a Finder
+rename field), but a program that *polls* the keyboard state instead of
+using events can miss such short presses.  If the queue is empty the first
+event is immediate; subsequent events are scheduled after the last queued
+key event.
 
 `type` and `key` both push to the same queue — you can interleave
 them freely, and the timing is cumulative.
