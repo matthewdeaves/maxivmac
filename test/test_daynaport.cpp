@@ -428,3 +428,35 @@ TEST_CASE("daynaport: a missing link does not stop selection or INQUIRY")
 	CHECK(r.read(0x12, 37, 0, 37)[0] == 3);
 	CHECK(r.read(0x09, 6, 0, 18).size() == 18);
 }
+
+TEST_CASE("daynaport: works at any SCSI ID 0-6 (donor hard-coded ID 4)")
+{
+	for (int id = 0; id <= 6; id++)
+	{
+		DnRig r(id);
+		r.enable();
+		Bytes b = r.read(0x12, 37, 0, 37);
+		CHECK(std::memcmp(b.data() + 8, "Dayna   SCSI/Link", 17) == 0);
+		r.eth->inject(makeFrame(60, uint8_t(id)));
+		CHECK(r.read(0x08, 1524, 0xC0, 70)[6 + 20] == id);
+		for (int other = 0; other <= 6; other++)
+			if (other != id) CHECK_FALSE(r.h.select(other, false));
+	}
+}
+
+TEST_CASE("daynaport: two adapters on one bus are addressed independently")
+{
+	auto e1 = std::make_unique<FakeEthernet>();
+	auto e2 = std::make_unique<FakeEthernet>();
+	FakeEthernet *p1 = e1.get(), *p2 = e2.get();
+	DaynaPortTarget t1(std::move(e1), {2, 0, 0, 0, 0, 1}), t2(std::move(e2), {2, 0, 0, 0, 0, 2});
+	Ncr5380 c;
+	Host h{c};
+	c.attach(3, &t1);
+	c.attach(5, &t2);
+	REQUIRE(h.select(5, false));
+	h.sendCdb({0x0A, 0, 0, 0, 60, 0}); // WRITE while disabled: CHECK CONDITION from t2 only
+	CHECK(h.phase() == P_STATUS);
+	CHECK(p1->sent.empty());
+	CHECK(p2->sent.empty());
+}
