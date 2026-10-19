@@ -348,12 +348,15 @@ instead of replacing the current one, but this needs testing.
 screenshot "label"
 ```
 
-Save the current framebuffer to `<script-dir>/label.png`.  (The `.png` is
-added if the name has no extension.)  In unattended mode an unwritable
-path exits with status 1.
+Save the current framebuffer as `label.png` (the `.png` is added if the
+name has no extension).  A relative name is written under
+`$MAXIVMAC_OUT_DIR` when that environment variable is set (the directory
+is created), otherwise relative to the **current working directory** of
+the emulator process, not the script's directory.  An unwritable path
+exits with status 1 in unattended mode.
 
-Also saved automatically on timeout/failure (`fail-screenshot.png` /
-`timeout-screenshot.png`).
+On `fail` and on a `wait` timeout, `fail-screenshot.png` /
+`timeout-screenshot.png` are saved the same way.
 
 The framebuffer is updated once per 60 Hz tick, so a screenshot taken
 in the same instant a `wait text` fires may not show that text yet; put

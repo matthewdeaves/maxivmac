@@ -8,6 +8,7 @@
 #include "debugger/settings.h"
 #include "debugger/duration.h"
 #include "debugger/script_mouse.h"
+#include "debugger/script_paths.h"
 
 #include "core/machine.h"
 #include "core/ict_scheduler.h"
@@ -253,7 +254,7 @@ void CmdFail(Debugger &dbg, const std::vector<Token> &args)
 	dbg.io().write("FAIL: %s\n", msg.c_str());
 
 	// Save a failure screenshot
-	SaveScreenshot("fail-screenshot.png");
+	SaveScreenshot(ScriptOutputPath("fail-screenshot.png"));
 
 	std::exit(1);
 }
@@ -281,7 +282,7 @@ void CheckScriptTimeouts()
 							static_cast<double>(ScriptUnitsPerSecond()),
 						bp.timeoutBudget);
 
-		SaveScreenshot("timeout-screenshot.png");
+		SaveScreenshot(ScriptOutputPath("timeout-screenshot.png"));
 
 		uint32_t bpId = bp.id;
 		dbg->deleteById(bpId);

@@ -9,6 +9,7 @@
 #include "debugger/settings.h"
 #include "debugger/bp_text.h"
 #include "debugger/bp_screen.h"
+#include "debugger/script_paths.h"
 
 #include "core/machine.h"
 #include "core/ict_scheduler.h"
@@ -507,8 +508,7 @@ void CmdScreenshot(Debugger &dbg, const std::vector<Token> &args)
 		if (dbg.scriptMode()) std::exit(2);
 		return;
 	}
-	std::string path = args[0].text;
-	if (path.find('.') == std::string::npos) path += ".png";
+	std::string path = ScriptOutputPath(args[0].text);
 	if (SaveScreenshot(path))
 		dbg.io().write("Screenshot saved: %s\n", path.c_str());
 	else
