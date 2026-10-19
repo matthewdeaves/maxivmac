@@ -142,12 +142,15 @@ std::string guestFormatLog(uint32_t fmtAddr, uint32_t args[7])
 		/* consume optional flags/width/precision (e.g. "02", "-8") */
 		char fmtspec[16];
 		int fpos = 0;
+		int digitRun = 0; /* guest-controlled: "%.2000000000x" stalls the host for seconds */
 		fmtspec[fpos++] = '%';
 		while (i < fmt.size() &&
 			   (fmt[i] == '-' || fmt[i] == '+' || fmt[i] == ' ' || fmt[i] == '0' || fmt[i] == '#' ||
 				(fmt[i] >= '1' && fmt[i] <= '9') || fmt[i] == '.'))
 		{
-			if (fpos < 12) fmtspec[fpos++] = fmt[i];
+			const bool isDigit = fmt[i] >= '0' && fmt[i] <= '9';
+			digitRun = isDigit ? digitRun + 1 : 0;
+			if (fpos < 12 && digitRun <= 2) fmtspec[fpos++] = fmt[i];
 			i++;
 		}
 		if (i >= fmt.size()) break;
