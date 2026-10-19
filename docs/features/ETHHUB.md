@@ -137,6 +137,20 @@ echo: hello-tcp                                          (TCP 10.88.0.20 -> 10.8
 
 ## Limits and caveats
 
+- **Known abuse limits** (measured against a hub on loopback with scripts;
+  no code change, the protection is the loopback default and `--allow`):
+  - *Client table exhaustion*: 64 datagrams from 64 other source ports fill the
+    default table (`--max-clients`), after which a new legitimate client is
+    refused until entries expire (`--client-timeout`).
+  - *Amplification*: one 1514-byte broadcast is sent to every other client,
+    63 copies (about 95 KB) with 64 clients. With a spoofed UDP source address
+    a hub reachable from outside is a reflector.
+  - *MAC hijack*: the hub learns the source MAC of any frame, so a client that
+    sends a frame with another client's MAC as source takes over that MAC's
+    unicast traffic until the entry is relearned or expires.
+  - *Client table is not authenticated or rate limited* (also see Security).
+  - A fuzz run of random and truncated datagrams (several seeds, ASan build)
+    found no crash or sanitizer report.
 - **MTU**: frames above 1514 bytes (1500 MTU) are dropped; UDP datagrams are
   limited by the host path too. No fragmentation or jumbo support. A TAP
   device must stay at MTU 1500.

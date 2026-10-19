@@ -409,3 +409,149 @@ the branch that found them.
 - **Status:** fixed: exits 2 with "--headless needs --model=MODEL ... or a .mac
   file". Covered by `test/run_script_tests.sh`. Honouring the documented MacII
   default instead would be a behaviour decision; not taken here.
+
+## 2026-10: fix/static-findings pass (clang-tidy, cppcheck, ASan/UBSan, fuzzing)
+
+Found by a static-analysis and sanitizer sweep; the tooling is in
+`tools/static-analysis.sh` (see `docs/STATIC_ANALYSIS.md`). Each fix is its own
+commit on `fix/static-findings`.
+
+### F27. `MAXIVMAC_SANITIZE` only instrumented the emulator
+
+- **Symptom:** under the `macos-asan` preset `ctest` ran the unit tests, the
+  icon/ad2bin/imgutil tools and the hub integration test unsanitized, so a
+  sanitized `ctest` proved little.
+- **Status:** fixed: `add_compile_options` / `add_link_options` for every
+  target defined after the option.
+
+### F28. `Debugger::trapHook` read `dregs[-1]` for stack-selector dispatch traps
+
+- **Symptom:** `ParamLoc::Stack` is 0, so `idx = loc - 1` was -1 for
+  SCSIDispatch, TEDispatch, Shutdown, ScriptUtil and the other dispatch traps
+  whose selector is on the stack. Every headless script test aborted under
+  ASan (6 of 16 failed).
+- **Status:** fixed: register selectors only. Consequence (unchanged
+  behaviour, now explicit): a subtrap breakpoint on a *stack*-selector
+  dispatch trap never fires; reading the selector from the guest stack would
+  need the caller's frame layout and was not done. 16 of 16 script tests pass
+  sanitized. Not unit-testable (`debugger.cpp` is not linked into `tests`);
+  the sanitized script tests are the test.
+
+### F29. AppleDouble sidecar and resource-fork bounds checks wrapped in `uint32_t`
+
+- **Symptom:** `entry.offset + entry.length` (and `mapOff + 28`, `dataOff +
+  dataOff3`) wrapped, so a crafted `._file` passed the check and was then
+  indexed far outside the buffer (host read of attacker-chosen offsets). The
+  host-volume code parses sidecars of shared folders.
+- **Status:** fixed in `src/storage/appledouble.cpp` and
+  `tools/icon_extract/resource_fork.cpp` (64-bit arithmetic). Doctests with
+  crafted inputs; the sidecar one aborts under ASan without the fix.
+
+### F30. m68k: lazy X flag for ASR/ASL read the wrong operands; ROL.L signed shift
+
+- **Symptom:** `NeedDefaultLazyXFlag{Asr,AslB,AslW,AslL}` read `LazyFlagArg*`.
+  The X flag is evaluated lazily and has its own operand copy
+  (`LazyXFlagArg*`, set next to `LazyXFlagKind`); a later instruction that sets
+  the other flags but leaves X alone overwrites `LazyFlagArg*` first, so a
+  later `ROXL`/`ROXR`/`ADDX`/`MOVE from CCR` could see a wrong X. In
+  `ROL.L` with count 1, `1 << 31` shifted into an `int` sign bit (UB; same bits
+  in practice).
+- **Status:** fixed after reading the shift code (both sets are written with
+  the same values, so the change only matters in the overwritten case, which
+  is the bug). All six goldens verify unchanged, which says the golden runs do
+  not hit the case; there is **no test that exercises it directly** (the CPU
+  core is not linked into `tests`). Worth a CPU-level test if one is ever
+  built.
+
+### F31. Debugger number/duration parsers wrapped or kept garbage
+
+- **Symptom:** a failed `ParseNumber` (`$`, `0x`, a literal over 64 bits) left
+  `Token::numValue` uninitialised and the token was still a Number; hex and
+  decimal literals silently wrapped; `ParseDuration` used `strtoull` without
+  checking saturation and multiplied unchecked (`99999999999s` wrapped to a
+  short or zero timeout); `FormatDuration` wrapped `cycles * 1000`;
+  `ParseFmtSpec` overflowed `int` on a long count.
+- **Status:** fixed: such tokens become Words (the command reports an error),
+  durations that do not fit return false (`cannot parse timeout`), counts
+  saturate at 2^20. Doctests, plus `test/scripts/huge_timeout.dbg`.
+
+### F32. Debug server socket was world-connectable; client hang-up killed the emulator
+
+- **Symptom:** `/tmp/maxivmac-dbg-<pid>.sock` was created with the process
+  umask in a world-writable directory; the debugger can write guest memory
+  and mount host paths. A client closing mid-reply raised SIGPIPE.
+- **Status:** fixed: `umask(0077)` around `bind`, `SIGPIPE` ignored. Test checks
+  no group/other bits and that the umask is restored. The server stays
+  unauthenticated for the owning user.
+
+### F33. SLIP decoder buffered without limit
+
+- **Status:** fixed: 64 KiB cap; an oversized frame is dropped and the decoder
+  resynchronises on the next END. Doctest.
+
+### F34. extfs read/write allocated `ioReqCount` bytes
+
+- **Symptom:** the guest's 32-bit request count sized a `std::vector` (up to
+  4 GiB) on the host.
+- **Status:** fixed: one call transfers at most 64 MiB; the short count is
+  returned in the reply like any short read/write. Not covered by a test (the
+  extfs glue needs a running guest).
+
+### F35. `extn_clip` printf-style formatting took guest-sized widths
+
+- **Status:** fixed: a run of more than 2 digits in a flag/width/precision is
+  dropped (`%.2000000000x` took seconds). Consequence: widths above 99 are not
+  honoured. No test (the glue needs a running guest).
+
+### F36. `CpuSnapshot` reserved field was uninitialised
+
+- **Status:** fixed (`CpuSnapshot snap{}`). The verifier never compares the
+  field, and all six goldens verify. The shipped `.golden` files were **not**
+  touched (and `record.sh` was not run): their reserved words are stack
+  leftovers, so a fresh recording would differ from them in those 4 bytes per
+  snapshot anyway.
+
+### F37. Small hardening
+
+- `--speed=` / `--scale=` (and the two-argument forms) used `atoi`: `abc` and
+  out-of-range numbers were silently taken. Now whole-string, range-checked
+  (speed 0..5, scale 1..16), with a warning and the default on error.
+- Missing `<cerrno>` / `<array>` includes added (they compiled by accident).
+- `test/debugger_smoke.sh` removed `/tmp/maxivmac-dbg-*.sock`, i.e. the sockets
+  of every other running emulator; it now removes only its own.
+
+### F38. slirp: the guest can reach the host's loopback (not changed)
+
+- **Observation:** `slirp_stack.cpp` zeroes `SlirpConfig`, so
+  `disable_host_loopback` is false and `restricted` is false: the guest reaches
+  host services on 127.0.0.1 through the gateway address (10.0.2.2), and may
+  talk to arbitrary hosts. That is how port forwarding and the MacTCP ping
+  (F25) are set up and tested, and the emulator is a desktop tool, so the
+  behaviour is left alone. Setting `disable_host_loopback = true` is the knob
+  if the guest should not see host-local services; re-run `test/net/run-ping.sh`
+  after changing it.
+
+### F39. ethhub known limits (documented, no code change)
+
+- Found by abuse scripts against `tools/ethhub/ethhub` (see
+  `docs/features/ETHHUB.md`, "Known limits"): the 64-entry client table can be
+  filled by 64 datagrams from other ports so a legitimate client is refused;
+  one 1514-byte broadcast becomes 63 copies (63x amplification, reflectable
+  with spoofed UDP source addresses); a client can claim another client's MAC
+  by sending a frame with it as source, after which unicast to that MAC goes to
+  the claimant. A fuzz run of random datagrams (seeds 11-13, ASan) found no
+  crash. All of this assumes an attacker who can reach the UDP port; the hub
+  defaults to loopback and has `--allow`.
+
+### F40. Static analysis tooling and what is left
+
+- **Status:** `tools/static-analysis.sh` runs clang-tidy, cppcheck, shellcheck,
+  ruff and lizard against a ratcheted baseline; configs are the root, `src/`,
+  `src/cpu/` and `test/` `.clang-tidy` files and `tools/cppcheck.suppressions`.
+  See `docs/STATIC_ANALYSIS.md`.
+- **Left open** (counts are in the baseline): the clang-tidy and cppcheck
+  findings not listed above, shellcheck style findings, three ruff findings,
+  and complexity (see the lizard numbers); `cert-err33-c` hits on unchecked
+  `fwrite`/`fclose`/`sendto`/`recv`; the CPU core is intentionally exempt from
+  most style checks.
+
