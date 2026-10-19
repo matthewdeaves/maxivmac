@@ -390,6 +390,28 @@ class HubTest(unittest.TestCase):
         self.assertEqual(st["clients"], 2)
         self.assertEqual(st["dropped_denied"], 0)
 
+    def test_uplink_joins_other_hub(self):
+        h1 = self.start()
+        a = h1.client()
+        h1.send(a, b"")
+        h2 = Hub("--connect", "127.0.0.1:%d" % h1.addr[1], "--client-timeout", "2")
+        self.addCleanup(lambda: self.assertEqual(h2.stop()[0], 0))
+        b = h2.client()
+        h2.send(b, b"")
+        time.sleep(1.0)  # uplink hello registers h2 at h1
+        f = frame(BCAST, mac(1))
+        h1.send(a, f)
+        self.assertEqual(recv(b), f)
+        g = frame(mac(1), mac(2))  # reply is learned through the uplink: unicast
+        h2.send(b, g)
+        self.assertEqual(recv(a), g)
+        # the pinned uplink survives longer than h2's client timeout
+        time.sleep(3.5)
+        h2.send(b, b"")
+        settle()
+        h1.send(a, f)
+        self.assertEqual(recv(b), f)
+
     def test_bad_args(self):
         for args in (["--listen", "x:99999"], ["--max-clients", "0"], ["--bogus"],
                      ["--allow", "nonsense"], ["--allow", "10.0.0.0/33"], ["--allow", "10.0.0.0/"],
