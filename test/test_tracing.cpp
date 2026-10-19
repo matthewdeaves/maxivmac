@@ -1205,3 +1205,108 @@ TEST_CASE("TrapDefs actual traps.def has DrawText with TextBuf")
 	CHECK(tb->paramsIn[0].isText == true);
 	CHECK(tb->paramsIn[1].isTextCount == true);
 }
+
+/* ════════════════════════════════════════════════════════
+   Text capture for scripting (`wait text` / `break text`)
+   ════════════════════════════════════════════════════════ */
+
+#include <utility>
+#include <vector>
+extern std::vector<std::pair<std::string, std::string>> g_capturedText;
+
+static void setupTextTrapStack(uint32_t sp)
+{
+	memset(g_ram, 0, sizeof(g_ram[0]) * 1024);
+	uint32_t dregs[8] = {};
+	uint32_t aregs[8] = {};
+	aregs[7] = sp;
+	test_set_regs(dregs, aregs);
+	g_capturedText.clear();
+}
+
+static void putPascal(uint32_t addr, const char *s)
+{
+	size_t n = strlen(s);
+	g_ram[addr] = static_cast<uint8_t>(n);
+	for (size_t i = 0; i < n; i++)
+		g_ram[addr + 1 + i] = static_cast<uint8_t>(s[i]);
+}
+
+static TrapDefs &textTrapDefs()
+{
+	static TrapDefs defs;
+	static bool loaded = false;
+	if (!loaded)
+	{
+		ensureTypeRegistryInit();
+		defs.load("data/debug/traps.def");
+		loaded = true;
+	}
+	return defs;
+}
+
+TEST_CASE("text capture: DrawString yields the bare Pascal string")
+{
+	TrapTracer tracer(textTrapDefs());
+	const uint32_t sp = 0x100;
+	setupTextTrapStack(sp);
+	put_be32(sp, 0x300);
+	putPascal(0x300, "File");
+
+	tracer.captureTextParams(0xA884);
+
+	REQUIRE(g_capturedText.size() == 1);
+	/* no "$address" decoration around the text */
+	CHECK(g_capturedText[0].first == "File");
+	CHECK(g_capturedText[0].second == "DrawString");
+}
+
+TEST_CASE("text capture: MacRoman is converted to UTF-8, empty strings are skipped")
+{
+	TrapTracer tracer(textTrapDefs());
+	const uint32_t sp = 0x100;
+	setupTextTrapStack(sp);
+	put_be32(sp, 0x300);
+	g_ram[0x300] = 11;
+	memcpy(&g_ram[0x301], "Page Setup", 10);
+	g_ram[0x301 + 10] = 0xC9; /* MacRoman ellipsis */
+
+	tracer.captureTextParams(0xA884);
+	REQUIRE(g_capturedText.size() == 1);
+	CHECK(g_capturedText[0].first == "Page Setup\xE2\x80\xA6");
+
+	g_capturedText.clear();
+	g_ram[0x300] = 0; /* empty string */
+	tracer.captureTextParams(0xA884);
+	CHECK(g_capturedText.empty());
+
+	put_be32(sp, 0); /* nil pointer */
+	tracer.captureTextParams(0xA884);
+	CHECK(g_capturedText.empty());
+}
+
+TEST_CASE("text capture: DrawText reads start/count out of the buffer")
+{
+	TrapTracer tracer(textTrapDefs());
+	const uint32_t sp = 0x100;
+	setupTextTrapStack(sp);
+	/* DrawText(textBuf, firstByte, byteCount): count is on top of the stack */
+	put_be16(sp + 0, 3);	 /* byteCount */
+	put_be16(sp + 2, 1);	 /* firstByte */
+	put_be32(sp + 4, 0x300); /* textBuf */
+	memcpy(&g_ram[0x300], "Hello", 5);
+
+	tracer.captureTextParams(0xA885);
+
+	REQUIRE(g_capturedText.size() == 1);
+	CHECK(g_capturedText[0].first == "ell");
+	CHECK(g_capturedText[0].second == "DrawText");
+}
+
+TEST_CASE("text capture: traps without text parameters capture nothing")
+{
+	TrapTracer tracer(textTrapDefs());
+	setupTextTrapStack(0x100);
+	tracer.captureTextParams(0xA9A0); /* GetResource */
+	CHECK(g_capturedText.empty());
+}

@@ -200,12 +200,16 @@ void TrapTracer::captureTextParams(uint16_t trapWord)
 		}
 		else
 		{
-			// Text (Str255) — Pascal string pointer
-			std::string val = formatParam(pd, raw);
-			std::string_view sv = val;
-			if (sv.size() >= 2 && sv.front() == '"' && sv.back() == '"')
-				sv = sv.substr(1, sv.size() - 2);
-			ScriptCaptureText(sv, def->name);
+			// Text (Str255) — pointer to a Pascal string (length byte + MacRoman bytes).
+			// Read it directly rather than via formatParam, whose "$addr \"text\""
+			// rendering would put the address into the matched text.
+			if (raw == 0) continue;
+			uint8_t len = get_vm_byte(raw);
+			if (len == 0) continue;
+			std::vector<uint8_t> buf(len);
+			for (int i = 0; i < len; i++)
+				buf[i] = get_vm_byte(raw + 1 + i);
+			ScriptCaptureText(UTF8FromMacRoman(buf), def->name);
 		}
 	}
 }

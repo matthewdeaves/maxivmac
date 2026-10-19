@@ -52,30 +52,40 @@ breakpoint features work with these: `commands`, `ignore`, `disable`,
 break text "pattern"
 ```
 
-Fire when a trap passes text matching the substring.  Text is
-captured from traps whose `traps.def` parameter type is `Text`:
+Fire when the guest *draws* text containing the substring.  This is an
+**event** match, not a screen reader: the emulator watches the A-line
+traps that render text and compares the strings they are given.  It
+sees:
 
-```
-A884 DrawString toolbox
-  in  s:Text
+| Trap | Text source |
+|---|---|
+| `DrawString` | Pascal string (menu titles and items, window titles, Finder icon names, most UI labels) |
+| `DrawText`, `StdText`, `TextBox` | text buffer (`start`/`count` honoured), e.g. dialog static text, TextEdit, alert bodies |
+| `ParamText` | the four substitution strings of an alert/dialog (when they are set) |
 
-A98B ParamText toolbox
-  in  param0:Text  param1:Text  param2:Text  param3:Text
-```
+Strings are converted from MacRoman to UTF-8; the pattern is a plain
+case-sensitive substring.  Run with `showtext on` to see exactly what is
+captured and discover patterns.
 
-`Text` is a semantic annotation on `Str255` — a pointer to a Pascal
-string in guest memory.  The trap tracer captures `Text` values and
-checks them against active text breakpoints.
+Consequences worth knowing:
 
-This piggybacks on the existing `traps.def` → `TypeRegistry` →
-`TrapTracer` pipeline.  Adding text capture to a new trap is a
-one-line edit in `traps.def` — change the param type to `Text`.
+- Only text drawn **after** the `wait text` is armed can match.  The Finder
+  menu bar is drawn once at boot; `wait text "File"` issued after the
+  desktop is up will not see it, but `wait text "Special"` issued before
+  boot completes will.  To check for something already on screen use
+  `wait screen`, or pull the menu down again (`mousedown`) so it is
+  redrawn.
+- The match fires while the guest is still drawing.  The framebuffer shown
+  by `screenshot` is updated at the end of each 60 Hz tick, so add a short
+  `wait for 100ms` before a screenshot that should contain the text.
+- Text rendered by other means (bitmap fonts blitted by an application,
+  QuickDraw `CopyBits` of pre-rendered text, PICTs) is invisible to it.
+- Needs `data/debug/traps.def` (found automatically, see BUILDING.md).
+  With the definitions missing the emulator prints a warning at start-up.
 
-For traps that pass text as `Ptr` + length (e.g. `TextBox`), a
-future `TextBuf` type could handle the pair, but `Text` (Pascal
-string pointer) covers the common cases.
-
-Script strings are UTF-8, converted to MacRoman for matching.
+Adding another trap is a one-line `traps.def` edit: give a Pascal-string
+parameter the type `Text`, or a buffer/start/count triple the types
+`TextBuf`/`TextStart`/`TextCount`.
 
 ### break screen
 
