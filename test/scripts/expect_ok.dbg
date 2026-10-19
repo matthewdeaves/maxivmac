@@ -1,0 +1,7 @@
+# expect succeeds like wait; log prints a line with the emulated time.
+set default-timeout 120s
+log "waiting for the Finder"
+expect text "Special"
+wait for 200ms
+expect text "File" 1s recent
+log "Finder is up"

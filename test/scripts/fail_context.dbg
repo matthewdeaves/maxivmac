@@ -1,0 +1,3 @@
+set default-timeout 120s
+wait text "Special"
+fail "boom"

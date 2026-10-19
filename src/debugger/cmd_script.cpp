@@ -48,6 +48,26 @@ static double EmuSeconds(uint64_t units)
 	return static_cast<double>(units) / static_cast<double>(ScriptUnitsPerSecond());
 }
 
+/* "file:line: command" of the script line being executed, for failure messages. */
+static std::string CurrentOrigin(Debugger &dbg)
+{
+	const ScriptLine *l = dbg.currentScriptLine();
+	if (!l) return "(typed at the prompt)";
+	size_t b = l->text.find_first_not_of(" \t");
+	std::string cmd = b == std::string::npos ? std::string() : l->text.substr(b);
+	if (l->file.empty()) return cmd;
+	return l->file + ":" + std::to_string(l->line) + ": " + cmd;
+}
+
+/* What a failing script prints after its message: where the failing command
+   is, and the text the guest drew last (what it was actually doing). */
+static void PrintFailureContext(Debugger &dbg, const std::string &origin)
+{
+	dbg.io().write("  at %s\n", origin.c_str());
+	auto s = FormatTextHistory(ScriptTextHistory(), 10, ScriptUnitsPerSecond());
+	dbg.io().write("%s", s.c_str());
+}
+
 /* Report a bad script command.  In unattended script mode (--dbg-script
    without --debugger) a script that cannot run as written must not carry on
    and report success, so exit with status 2. */
@@ -77,7 +97,9 @@ static void WaitUsage(Debugger &dbg)
 	}
 }
 
-void CmdWait(Debugger &dbg, const std::vector<Token> &args)
+/* wait and expect: `expect` only takes `text` and `screen`, and running out
+   of time is reported as a failed expectation. */
+static void DoWait(Debugger &dbg, const std::vector<Token> &args, bool expect)
 {
 	if (args.empty() || args[0].isEnd())
 	{
@@ -118,6 +140,8 @@ void CmdWait(Debugger &dbg, const std::vector<Token> &args)
 	bp.enabled = true;
 	bp.temporary = true;
 	bp.scriptOwned = true;
+	bp.expect = expect;
+	bp.origin = CurrentOrigin(dbg);
 	ScaledCycleCount budget = 0;
 	size_t idx = 0;
 
@@ -130,6 +154,7 @@ void CmdWait(Debugger &dbg, const std::vector<Token> &args)
 		}
 		bp.kind = Debugger::Breakpoint::Kind::Text;
 		bp.textPattern = args[1].text;
+		bp.what = "text \"" + bp.textPattern + "\"";
 		idx = 2;
 		if (!parseBudget(idx, budget)) return;
 		setDeadline(bp, budget);
@@ -162,6 +187,7 @@ void CmdWait(Debugger &dbg, const std::vector<Token> &args)
 			return;
 		}
 		bp.kind = Debugger::Breakpoint::Kind::Screen;
+		bp.what = "screen \"" + args[1].text + "\"";
 		if (!bp.screenMatcher.loadReference(args[1].text))
 		{
 			ScriptError(dbg, ("Error: cannot load reference PNG '" + args[1].text + "'").c_str());
@@ -262,6 +288,39 @@ void CmdWait(Debugger &dbg, const std::vector<Token> &args)
 	dbg.setRunning();
 }
 
+void CmdWait(Debugger &dbg, const std::vector<Token> &args)
+{
+	DoWait(dbg, args, false);
+}
+
+/* expect text "x" [timeout] [recent [window]]
+   expect screen "ref.png" [timeout] [pct]
+   Like wait, but not meeting the condition in time is a failed expectation:
+   a message with the script line and the recent text, exit status 1. */
+void CmdExpect(Debugger &dbg, const std::vector<Token> &args)
+{
+	if (args.empty() || !(args[0].isWord("text") || args[0].isWord("screen")))
+	{
+		ScriptError(dbg,
+					"Usage: expect text \"pattern\" [timeout] [recent [window]]\n"
+					"       expect screen \"ref.png\" [timeout] [pct]");
+		return;
+	}
+	DoWait(dbg, args, true);
+}
+
+void ScriptLogMessage(Debugger &dbg, const std::vector<Token> &args)
+{
+	std::string msg;
+	for (const auto &t : args)
+	{
+		if (t.isEnd()) break;
+		if (!msg.empty()) msg += ' ';
+		msg += t.text;
+	}
+	dbg.io().write("[%9.3fs] %s\n", EmuSeconds(g_ict.getCurrent()), msg.c_str());
+}
+
 void CmdClear(Debugger &dbg, const std::vector<Token> &args)
 {
 	if (args.empty() || !args[0].isWord("text"))
@@ -294,6 +353,7 @@ void CmdFail(Debugger &dbg, const std::vector<Token> &args)
 	if (!args.empty() && !args[0].isEnd()) msg = args[0].text;
 
 	dbg.io().write("FAIL: %s\n", msg.c_str());
+	PrintFailureContext(dbg, CurrentOrigin(dbg));
 
 	// Save a failure screenshot
 	SaveScreenshot(ScriptOutputPath("fail-screenshot.png"));
@@ -318,11 +378,17 @@ void CheckScriptTimeouts()
 		if (now < bp.timeoutAt) continue;
 
 		// Timeout fired!
-		dbg->io().write("TIMEOUT: wait (bp %u) expired after %.3f s emulated (%" PRIu64 " units)\n",
-						bp.id,
-						static_cast<double>(bp.timeoutBudget) /
-							static_cast<double>(ScriptUnitsPerSecond()),
-						bp.timeoutBudget);
+		const double secs =
+			static_cast<double>(bp.timeoutBudget) / static_cast<double>(ScriptUnitsPerSecond());
+		if (bp.expect)
+			dbg->io().write("EXPECT FAILED: %s not seen within %.3f s emulated (%" PRIu64 " units)\n",
+							bp.what.c_str(), secs, bp.timeoutBudget);
+		else
+			dbg->io().write("TIMEOUT: wait (bp %u) expired after %.3f s emulated (%" PRIu64
+							" units)\n",
+							bp.id, secs, bp.timeoutBudget);
+		if (!bp.what.empty() && !bp.expect) dbg->io().write("  waiting for: %s\n", bp.what.c_str());
+		PrintFailureContext(*dbg, bp.origin);
 
 		SaveScreenshot(ScriptOutputPath("timeout-screenshot.png"));
 

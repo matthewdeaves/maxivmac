@@ -82,6 +82,22 @@ the branch that found them.
   `text_not_recent.dbg`, `text_cleared.dbg`, `text_too_old.dbg` in
   `test/run_script_tests.sh`.
 
+### S7. Poor failure messages
+
+- **Symptom:** a timeout printed `TIMEOUT: wait (bp 3) expired ...` and
+  nothing else: not which script line, not what the guest was doing. A
+  `fail` printed its message only. With a 25-step script that is a screenshot
+  and a guess.
+- **Status:** fixed. Script lines now carry `file:line` (S5). Every wait
+  timeout, `expect` failure and `fail` prints `at file:line: command` and the
+  last ten drawn strings with their emulated times. New `expect text|screen`
+  (a `wait` that reports as an assertion) and `log "message"` (timestamped,
+  emulated time). The old `log` command (guest log) already existed, so
+  `log` with a *quoted* first argument is the message form; that needed a
+  `quoted` flag on tokenizer tokens. Tests: `expect_ok.dbg`,
+  `expect_fail.dbg`, `fail_context.dbg`, `must_timeout.dbg` in
+  `test/run_script_tests.sh`; `test/test_script_text.cpp` for the formatter.
+
 ## 2026-10: found during feat/scsi-bus
 
 ### F1. Legacy SCSI stub: SEL check only matches ICR == 0x04

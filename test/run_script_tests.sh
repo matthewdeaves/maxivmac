@@ -143,6 +143,12 @@ expect "plain wait text does not see older text"    text_not_recent.dbg 1 "TIMEO
 expect "clear text empties the recent buffer"       text_cleared.dbg    1 "TIMEOUT" disk
 expect "recent honours its window"                  text_too_old.dbg    1 "TIMEOUT" disk
 
+expect "expect and log succeed"                     expect_ok.dbg       0 "] Finder is up" disk
+expect "failed expect reports the line and exit 1"  expect_fail.dbg     1 "expect_fail.dbg:5: expect text" disk
+expect "failed expect lists the recent text"        expect_fail.dbg     1 "recent text (newest last" disk
+expect "failed wait reports its line too"           must_timeout.dbg    1 "must_timeout.dbg:3: wait text" disk
+expect "fail reports its line and the recent text"  fail_context.dbg    1 "fail_context.dbg:3: fail" disk
+
 # `source` inside a script: a wait in the sourced file must not drop the lines
 # after it, nor the lines after the `source` itself.
 if [ -f "$DISK" ]; then

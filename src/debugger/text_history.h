@@ -49,3 +49,9 @@ private:
 
 // The history of the running emulator (filled by ScriptCaptureText).
 TextHistory &ScriptTextHistory();
+
+// The newest `n` records, one per line, oldest first, e.g.
+//   "  [   12.345s] DrawString \"Special\"\n"
+// `unitsPerSecond` converts the record times to seconds.  The header line says how
+// many of the kept records are shown.
+std::string FormatTextHistory(const TextHistory &h, size_t n, uint64_t unitsPerSecond);

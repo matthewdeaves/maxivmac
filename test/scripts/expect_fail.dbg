@@ -1,0 +1,5 @@
+# A failed expectation names the script line and lists what was drawn.
+set default-timeout 120s
+wait text "Special"
+wait for 200ms
+expect text "This will never appear" 500ms

@@ -2,6 +2,7 @@
 #pragma once
 
 #include <cstdint>
+#include <vector>
 
 using ScaledCycleCount = uint64_t;
 
@@ -15,6 +16,10 @@ void CheckScriptTimeouts();
 // numbers in script commands (wait budgets, `set default-timeout`) are in
 // these units; "5s" / "500ms" suffixes are converted with this rate.
 uint64_t ScriptUnitsPerSecond();
+
+// `log "message"`: print the message with the emulated time.
+struct Token;
+void ScriptLogMessage(class Debugger &dbg, const std::vector<Token> &args);
 
 // Default timeout budget for wait commands, in scheduler units
 // (setting "default-timeout"; 0 = infinite).

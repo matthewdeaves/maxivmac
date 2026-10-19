@@ -111,6 +111,7 @@ std::vector<Token> Tokenize(std::string_view line)
 			t.kind = Token::Kind::Word;
 			t.text = std::string(line.substr(start, pos - start));
 			t.numValue = 0;
+			t.quoted = true;
 			tokens.push_back(std::move(t));
 			if (pos < len) ++pos; /* skip closing quote */
 			continue;

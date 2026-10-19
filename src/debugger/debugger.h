@@ -92,6 +92,10 @@ public:
 		std::string textPattern;	 // UTF-8 substring (Kind::Text)
 		ScreenMatcher screenMatcher; // reference image (Kind::Screen)
 
+		std::string origin;	 // script file:line and command that made it (waits)
+		std::string what;	 // what it waits for, for failure messages
+		bool expect = false; // `expect`: running out of time is an expectation failure
+
 		std::string condition;			   // raw condition text
 		std::vector<std::string> commands; // auto-execute on hit
 		uint32_t ignoreCount = 0;		   // remaining hits to skip

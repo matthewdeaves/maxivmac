@@ -66,6 +66,7 @@ void CmdWait(Debugger &dbg, const std::vector<Token> &args);
 void CmdFail(Debugger &dbg, const std::vector<Token> &args);
 void CmdTimeout(Debugger &dbg, const std::vector<Token> &args);
 void CmdClear(Debugger &dbg, const std::vector<Token> &args);
+void CmdExpect(Debugger &dbg, const std::vector<Token> &args);
 void CmdDrag(Debugger &dbg, const std::vector<Token> &args);
 void CmdMove(Debugger &dbg, const std::vector<Token> &args);
 void CmdMouseDown(Debugger &dbg, const std::vector<Token> &args);
@@ -175,7 +176,9 @@ static CmdEntry s_commands[] = {
 	 "info <break|reg|traps|globals|symbol|insn|via|scrap|console|script|keys>\n  Show various debugger "
 	 "information.\n",
 	 "Information"},
-	{"log", "", CmdLog, "Show guest log / log to file",
+	{"log", "", CmdLog, "Show guest log / log to file / print a message",
+	 "log \"message\"\n  Print the message with the emulated time, e.g. '[   23.456s] message'.\n"
+	 "  (A quoted first argument is a message; scripts use it to annotate their output.)\n"
 	 "log [N]\n  Show last N guest log lines (default 20).\n"
 	 "log grep <pattern>\n  Show guest log lines matching pattern.\n"
 	 "log file <path>\n  Mirror all debugger output to <path> (append mode).\n"
@@ -218,6 +221,12 @@ static CmdEntry s_commands[] = {
 	 "wait trap <name> [timeout]\n  Resume until trap fires.\n"
 	 "  Timeout accepts: 5s, 500ms (emulated time), 1M, 100k, raw scheduler units, off.\n"
 	 "  Default: 'set default-timeout' (60s). A timeout exits the emulator with status 1.\n",
+	 "Scripting"},
+	{"expect", "", CmdExpect, "Wait, failing with a report if it does not happen",
+	 "expect text \"pattern\" [timeout] [recent [window]]\n"
+	 "expect screen \"ref.png\" [timeout] [pct]\n"
+	 "  Like 'wait', but when the timeout expires print 'EXPECT FAILED', the script\n"
+	 "  file:line and the text the guest drew last, save timeout-screenshot.png and exit 1.\n",
 	 "Scripting"},
 	{"clear", "", CmdClear, "Forget recently drawn text",
 	 "clear text\n  Empty the buffer of recently drawn text, so 'wait text ... recent' only sees\n"

@@ -4,6 +4,7 @@
 
 #include <doctest/doctest.h>
 #include "debugger/text_history.h"
+#include "debugger/cmd_parser.h"
 
 TEST_CASE("text history: find returns the newest match not older than 'since'")
 {
@@ -64,4 +65,31 @@ TEST_CASE("text history: zero capacity is treated as one")
 	h.push(2, "b", "t");
 	CHECK(h.size() == 1);
 	CHECK(h.find("b", 0) != nullptr);
+}
+
+TEST_CASE("text history: failure listing")
+{
+	TextHistory h;
+	CHECK(FormatTextHistory(h, 5, 1000) == "  recent text: none drawn\n");
+	h.push(2500, "Special", "DrawString");
+	h.push(3000, "say \"hi\"", "DrawText");
+	h.push(4000, "OK", "DrawString");
+	auto s = FormatTextHistory(h, 2, 1000);
+	CHECK(s.find("2 of 3") != std::string::npos);
+	CHECK(s.find("Special") == std::string::npos); // only the newest two
+	CHECK(s.find("3.000s] DrawText \"say \"hi\"\"") != std::string::npos);
+	CHECK(s.find("4.000s] DrawString \"OK\"") != std::string::npos);
+	CHECK(s.find("DrawText") < s.find("\"OK\"")); // oldest first
+}
+
+TEST_CASE("tokenizer: quoted words are marked, so `log \"file\"` is a message")
+{
+	auto q = Tokenize("log \"file\" 3");
+	REQUIRE(q.size() >= 3);
+	CHECK(q[1].isWord("file"));
+	CHECK(q[1].quoted);
+	CHECK_FALSE(q[0].quoted);
+	auto u = Tokenize("log file");
+	REQUIRE(u.size() >= 2);
+	CHECK_FALSE(u[1].quoted);
 }

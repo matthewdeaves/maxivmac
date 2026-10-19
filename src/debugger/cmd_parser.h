@@ -20,6 +20,7 @@ struct Token
 	Kind kind;
 	std::string text;
 	uint64_t numValue; // valid when kind == Number
+	bool quoted = false; // written "in quotes" (kind is Word)
 
 	bool isWord() const { return kind == Kind::Word; }
 	bool isWord(std::string_view s) const { return kind == Kind::Word && text == s; }

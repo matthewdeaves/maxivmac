@@ -41,11 +41,24 @@ you what happened:
 | Status | Meaning |
 |---|---|
 | 0 | script ran to the end (`[script completed]`) or executed `exit 0` |
-| 1 | a `wait` timed out, `fail` ran, `exit 1`, or a screenshot could not be saved |
+| 1 | a `wait` timed out, an `expect` failed, `fail` ran, `exit 1`, or a screenshot could not be saved |
 | 2 | the script itself is wrong: unreadable script file, unknown or ambiguous command, unparsable argument (e.g. a bad timeout, unresolvable key, unknown trap), a `commands` block |
 
-The failing line is printed and, for timeouts and `fail`, a screenshot
-is saved (see [screenshot](#screenshot)).
+For timeouts, failed `expect`s and `fail`, the output ends with the failing
+command and what the guest was doing, and a screenshot is saved (see
+[screenshot](#screenshot)):
+
+```
+EXPECT FAILED: text "Cannot open MacTCP" not seen within 5.000 s emulated (2506752000 units)
+  at /work/ping.dbg:42: expect text "Cannot open MacTCP" 5s
+  recent text (newest last, 10 of 87):
+    [   21.329s] DrawString "File"
+    ...
+    [   21.553s] DrawString "Trash"
+```
+
+(the script file and line, the command as written, and the last ten strings
+the guest drew with the emulated time of each).
 
 The run is deterministic: with the same ROM, disk image, and script, two
 runs produce byte-identical screenshots and CPU traces (verified by
@@ -216,7 +229,9 @@ wins.  The timeout defaults to the value set by `timeout` /
 `set default-timeout`; `wait ... off` waits forever.
 
 **On timeout failure:**
-- Print `TIMEOUT: wait (bp N) expired after ...` to the debugger output
+- Print `TIMEOUT: wait (bp N) expired after ...` to the debugger output,
+  followed by what it was waiting for, the script `file:line: command`, and
+  the recent text (see [expect](#expect))
 - Save `timeout-screenshot.png` in the current working directory
 - In unattended script mode (`--dbg-script` without `--debugger`): exit
   with status 1
@@ -251,6 +266,32 @@ reaction you want to match, so `recent` only sees text drawn from then on.
 times.  The buffer is the same one the failure messages print.
 
 ## Other new commands
+
+### expect
+
+```
+expect text "pattern" [timeout] [recent [window]]
+expect screen "ref.png" [timeout] [pct]
+```
+
+Exactly like `wait text` / `wait screen` (same arguments, same defaults, same
+`recent` option), but the intent is an assertion: when the condition is not
+met in time the script fails with `EXPECT FAILED: ...`, the `file:line:
+command` of the `expect`, the last ten strings the guest drew, a
+`timeout-screenshot.png`, and exit status 1.  Use `wait` to synchronise and
+`expect` to check an outcome; the only difference is how the failure reads.
+
+### log
+
+```
+log "Finder is up"
+```
+
+Print the message, prefixed with the emulated time, to the debugger output
+(stdout), so a test log reads as a story: `[   21.543s] Finder is up`.
+Quote the message: `log` with an unquoted first argument is the older
+command that shows the guest's debug log (`log 20`, `log grep x`,
+`log file path`).
 
 ### timeout
 
@@ -443,8 +484,9 @@ The script must wait for shutdown to complete:
 fail "something went wrong"
 ```
 
-Terminate the emulator with exit code 1 and print the message to
-stderr.  Useful in `commands` blocks on breakpoints to catch error
+Terminate the emulator with exit code 1 and print the message, the script
+`file:line: command` and the recent text (as for `expect`) to the debugger
+output.  Useful in `commands` blocks on breakpoints to catch error
 conditions early.
 
 ## Script suspension and resumption
