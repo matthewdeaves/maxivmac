@@ -143,19 +143,21 @@ scsi::Step DaynaPortTarget::handle(uint8_t lun)
 			// The boot-time size-one probe must fail without a data phase.
 			if (size < 6) return error(kIllegalRequest);
 			size_t n = 0;
-			if (enabled_ && eth_->peekSize())
-				n = eth_->receive(std::span<uint8_t>(buf_.data() + 6, kEthMaxFrame));
-			if (n)
-			{
-				// Ethernet minimum excludes FCS; backends may omit padding.
-				if (n < 60) n = 60;
-				if (n + 10 > size) return error(kIllegalRequest);
-				const uint32_t crc = crc32(buf_.data() + 6, n);
-				for (int i = 0; i < 4; i++) buf_[6 + n + i] = uint8_t(crc >> (8 * i));
-				n += 4;
-				buf_[0] = uint8_t(n >> 8);
-				buf_[1] = uint8_t(n);
-			}
+			if (enabled_)
+				if (const size_t pk = eth_->peekSize())
+				{
+					// Ethernet minimum excludes FCS; backends may omit padding.
+					n = std::max<size_t>(pk, 60);
+					// Check the room *before* dequeueing: a frame that does not
+					// fit stays queued rather than being lost.
+					if (n + 10 > size) return error(kIllegalRequest);
+					eth_->receive(std::span<uint8_t>(buf_.data() + 6, kEthMaxFrame));
+					const uint32_t crc = crc32(buf_.data() + 6, n);
+					for (int i = 0; i < 4; i++) buf_[6 + n + i] = uint8_t(crc >> (8 * i));
+					n += 4;
+					buf_[0] = uint8_t(n >> 8);
+					buf_[1] = uint8_t(n);
+				}
 			return dataIn(n + 6);
 		}
 		case kGetMac:

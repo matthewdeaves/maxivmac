@@ -326,3 +326,19 @@ TEST_CASE("daynaport: random register traffic never crashes")
 		if (i % 1000 == 0) r.c.reset();
 	}
 }
+
+// ---- fixes over the donor implementation ----
+
+TEST_CASE("daynaport fix: a READ whose buffer is too small leaves the frame queued")
+{
+	DnRig r;
+	r.enable();
+	Bytes f = makeFrame(200, 0x33);
+	r.eth->inject(f);
+	r.command(0x08, 100, 0xC0); // 100 < 6 + 200 + 4
+	r.finish(2);
+	CHECK(r.eth->queued() == 1); // donor dequeued and lost it
+	Bytes b = r.read(0x08, 1524, 0xC0, 6 + 200 + 4);
+	CHECK(Bytes(b.begin() + 6, b.begin() + 206) == f);
+	CHECK(r.eth->queued() == 0);
+}
