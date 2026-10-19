@@ -77,7 +77,7 @@ size_t waitFrame(EthHub &h)
 	return 0;
 }
 
-std::unique_ptr<EthHub> make(const FakeHub &hub, EthHub::Options o = {})
+std::unique_ptr<EthHub> make(const FakeHub &hub, const EthHub::Options &o = {})
 {
 	std::string err;
 	auto h = EthHub::create(hub.spec(), err, o);
@@ -285,5 +285,125 @@ TEST_CASE("eth hub: adapters on a hub get distinct random MACs unless --eth-mac 
 	ScsiTargetOptions n;
 	n.eth = "none";
 	CHECK(mac(n) == DaynaPortTarget::kDefaultMac);
+}
+
+// ---- optional shared-secret hello (eth_hub_auth.h) -------------------------------
+
+#include <sys/stat.h>
+
+#include <cstdio>
+#include <cstdlib>
+#include <fstream>
+#include <string_view>
+
+#include "devices/eth_hub_auth.h"
+
+namespace
+{
+std::vector<uint8_t> bytes(std::string_view s) { return {s.begin(), s.end()}; }
+
+std::string hex(std::span<const uint8_t> b)
+{
+	std::string o;
+	char t[3];
+	for (uint8_t c : b)
+	{
+		snprintf(t, sizeof t, "%02x", c);
+		o += t;
+	}
+	return o;
+}
+
+// A key file in the temp directory; the caller removes it.
+std::string writeKey(const std::string &content, mode_t mode, const char *tag)
+{
+	const std::string path = std::string(std::getenv("TMPDIR") ? std::getenv("TMPDIR") : "/tmp") + "/maxivmac_hubkey_" +
+							 tag + "_" + std::to_string(::getpid());
+	{
+		std::ofstream f(path, std::ios::binary);
+		REQUIRE(f.good());
+		f << content;
+	}
+	REQUIRE(::chmod(path.c_str(), mode) == 0);
+	return path;
+}
+} // namespace
+
+TEST_CASE("eth hub auth: HMAC-SHA256 matches RFC 4231")
+{
+	const auto k1 = std::vector<uint8_t>(20, 0x0b);
+	CHECK(hex(hmacSha256(k1, bytes("Hi There"))) == "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7");
+	CHECK(hex(hmacSha256(bytes("Jefe"), bytes("what do ya want for nothing?"))) ==
+		  "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843");
+	// a key longer than the block size is hashed first (RFC 4231 case 6)
+	const auto k6 = std::vector<uint8_t>(131, 0xaa);
+	CHECK(hex(hmacSha256(k6, bytes("Test Using Larger Than Block-Size Key - Hash Key First"))) ==
+		  "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54");
+}
+
+TEST_CASE("eth hub auth: the keyed hello has the documented layout")
+{
+	const auto h = makeHubHello(bytes("correct horse battery staple"), 1700000000);
+	CHECK(h.size() == 13);
+	CHECK(hex(h) == "e76553f100b9c5df5b4db19be1"); // computed independently with Python's hmac
+	CHECK(hex(makeHubHello(bytes("correct horse battery staple"), 1700000000ull + (1ull << 32))) == hex(h));
+}
+
+TEST_CASE("eth hub auth: key files must be private, long enough, newline-trimmed")
+{
+	std::vector<uint8_t> key;
+	std::string err;
+	const std::string good = writeKey("0123456789abcdef-secret\n", 0600, "good");
+	CHECK(loadHubKey(good, key, err));
+	CHECK(std::string(key.begin(), key.end()) == "0123456789abcdef-secret");
+	const std::string open = writeKey("0123456789abcdef-secret", 0644, "open");
+	CHECK_FALSE(loadHubKey(open, key, err));
+	CHECK(err.find("chmod 600") != std::string::npos);
+	const std::string shortk = writeKey("tooshort", 0600, "short");
+	CHECK_FALSE(loadHubKey(shortk, key, err));
+	CHECK_FALSE(loadHubKey("/nonexistent/maxivmac_key", key, err));
+	for (const auto &p : {good, open, shortk}) ::unlink(p.c_str());
+}
+
+TEST_CASE("eth hub auth: with a key the start hello and every keepalive are keyed hellos")
+{
+	FakeHub hub;
+	int64_t wall = 1000;
+	EthHub::Options o;
+	o.wallMs = [&] { return wall; };
+	o.key = bytes("correct horse battery staple");
+	o.unixSec = [] { return uint64_t(1700000000); };
+	auto h = make(hub, o);
+	std::vector<uint8_t> d;
+	REQUIRE(hub.recv(d));
+	CHECK(hex(d) == "e76553f100b9c5df5b4db19be1");
+	wall += 5000;
+	h->poll();
+	REQUIRE(hub.recv(d));
+	CHECK(d.size() == 13);
+	CHECK(h->stats().hellos == 2);
+	// frames are unchanged
+	const auto f = makeFrame(60, 5);
+	CHECK(h->send(f));
+	REQUIRE(hub.recv(d));
+	CHECK(d == f);
+}
+
+TEST_CASE("eth hub auth: --eth=hub:...,key=FILE reads the key; a bad key file means no network")
+{
+	FakeHub hub;
+	const std::string good = writeKey("0123456789abcdef-secret", 0600, "fac");
+	auto be = CreateEthBackend("hub:" + hub.spec() + ",key=" + good, {});
+	CHECK(std::string(be->name()) == "hub");
+	std::vector<uint8_t> d;
+	REQUIRE(hub.recv(d));
+	CHECK(d.size() == 13); // keyed
+	::unlink(good.c_str());
+	CHECK(std::string(CreateEthBackend("hub:" + hub.spec() + ",key=/nonexistent/maxivmac_key", {})->name()) == "none");
+	// no key: a plain empty hello, as always
+	FakeHub hub2;
+	auto plain = CreateEthBackend("hub:" + hub2.spec(), {});
+	REQUIRE(hub2.recv(d));
+	CHECK(d.empty());
 }
 #endif

@@ -2,7 +2,7 @@
 	eth_hub.h — EthHub: an EthernetBackend that joins an ethhub virtual LAN
 	(tools/ethhub, docs/features/ETHHUB.md) over UDP.
 
-	  --eth=hub:HOST:PORT
+	  --eth=hub:HOST:PORT[,key=FILE]
 
 	Wire format (fixed by the hub): one raw Ethernet frame, 14..1514 bytes, per
 	UDP datagram in both directions; a zero-length datagram is a hello /
@@ -21,6 +21,11 @@
 	  - linkUp() is true as soon as the socket is open.  UDP is connectionless:
 	    it says nothing about whether a hub is listening or alive.
 
+	With key=FILE (or MAXIVMAC_HUB_KEY_FILE in the environment) the hello is the
+	13-byte keyed hello of eth_hub_auth.h, which a hub started with --key-file
+	needs before it accepts anything from this socket; frames are unchanged.
+	Without a key the wire is byte-for-byte what it always was.
+
 	Several emulators on one hub must have different MACs; sharesLan() tells
 	the SCSI factory so it can pick a unique default (see scsi_factory.cpp).
 
@@ -32,6 +37,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "devices/eth_backend.h"
 #include "devices/eth_queue.h"
@@ -41,6 +47,10 @@ struct EthHubOptions
 	int64_t keepaliveMs = 5000;
 	// Wall clock in milliseconds (monotonic); empty = std::chrono::steady_clock.
 	std::function<int64_t()> wallMs;
+	// Shared secret for the keyed hello (see eth_hub_auth.h); empty = plain hello.
+	std::vector<uint8_t> key;
+	// Unix time in seconds for the keyed hello; empty = the system clock.
+	std::function<uint64_t()> unixSec;
 };
 
 class EthHub : public EthernetBackend

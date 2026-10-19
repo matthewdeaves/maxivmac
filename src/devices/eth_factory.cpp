@@ -5,6 +5,7 @@
 #include "devices/eth_factory.h"
 
 #include <cstdio>
+#include <cstdlib>
 #include <functional>
 #include <map>
 
@@ -15,6 +16,7 @@
 #endif
 #if HAVE_ETH_HUB
 #include "devices/eth_hub.h"
+#include "devices/eth_hub_auth.h"
 #endif
 
 namespace
@@ -44,7 +46,18 @@ std::unique_ptr<EthernetBackend> makeHub(const EthSpec &spec, const std::vector<
 	if (!extra.empty() || !spec.hostfwds.empty())
 		fprintf(stderr, "[ETH] hub: host forwards do not apply to a hub; ignored\n");
 	std::string err;
-	auto h = EthHub::create(spec.arg, err);
+	EthHub::Options opt;
+	std::string keyPath;
+	for (const auto &[k, v] : spec.options)
+		if (k == "key" && keyPath.empty()) keyPath = v;
+	if (keyPath.empty())
+		if (const char *env = std::getenv("MAXIVMAC_HUB_KEY_FILE")) keyPath = env;
+	if (!keyPath.empty() && !loadHubKey(keyPath, opt.key, err))
+	{
+		fprintf(stderr, "[ETH] %s; using no network\n", err.c_str());
+		return std::make_unique<EthNull>();
+	}
+	auto h = EthHub::create(spec.arg, err, std::move(opt));
 	if (!h)
 	{
 		fprintf(stderr, "[ETH] %s; using no network\n", err.c_str());

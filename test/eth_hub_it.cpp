@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "devices/eth_hub.h"
+#include "devices/eth_hub_auth.h"
 
 namespace
 {
@@ -65,10 +66,20 @@ std::vector<std::vector<std::vector<uint8_t>>> pump(std::vector<Node> &nodes, in
 
 int main(int argc, char **argv)
 {
-	if (argc != 2)
+	if (argc != 2 && argc != 3)
 	{
-		fprintf(stderr, "usage: eth-hub-it HOST:PORT\n");
+		fprintf(stderr, "usage: eth-hub-it HOST:PORT [KEYFILE]\n");
 		return 2;
+	}
+	EthHub::Options opt;
+	if (argc == 3)
+	{
+		std::string kerr;
+		if (!loadHubKey(argv[2], opt.key, kerr))
+		{
+			fprintf(stderr, "%s\n", kerr.c_str());
+			return 2;
+		}
 	}
 	std::vector<Node> n;
 	const Mac macs[3] = {{0x02, 0, 0, 0, 0, 0x0A}, {0x02, 0, 0, 0, 0, 0x0B}, {0x02, 0, 0, 0, 0, 0x0C}};
@@ -76,7 +87,7 @@ int main(int argc, char **argv)
 	for (int i = 0; i < 3; i++)
 	{
 		std::string err;
-		auto h = EthHub::create(argv[1], err);
+		auto h = EthHub::create(argv[1], err, opt);
 		if (!h)
 		{
 			fprintf(stderr, "%s\n", err.c_str());

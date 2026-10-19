@@ -3,6 +3,7 @@
 */
 
 #include "devices/eth_hub.h"
+#include "devices/eth_hub_auth.h"
 
 #include <arpa/inet.h>
 #include <cerrno>
@@ -118,6 +119,16 @@ void EthHub::hello()
 {
 	lastHelloMs_ = now();
 	stats_.hellos++;
+	if (!opt_.key.empty())
+	{
+		const uint64_t t = opt_.unixSec ? opt_.unixSec()
+										: uint64_t(std::chrono::duration_cast<std::chrono::seconds>(
+													   std::chrono::system_clock::now().time_since_epoch())
+													   .count());
+		const auto h = makeHubHello(opt_.key, t);
+		(void)sendDatagram(h.data(), h.size());
+		return;
+	}
 	(void)sendDatagram(nullptr, 0); // a lost hello is repeated in 5 s
 }
 

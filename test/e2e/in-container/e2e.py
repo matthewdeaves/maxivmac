@@ -281,8 +281,15 @@ class Run:
                                 # emulator then opens it write-protected ("locked startup disk" in the Chooser)
 
         # hub with the container's tap as one port, ingress pcap
+        # E2E_HUB_KEY=1: the hub needs the shared secret and the emulator sends it (ETHHUB.md, Authentication);
+        # tap0 is the hub's own pinned port and needs no key
+        keyfile = None
+        if os.environ.get("E2E_HUB_KEY"):
+            keyfile = self.path("hub.key")
+            with open(os.open(keyfile, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as kf:
+                kf.write("e2e-shared-secret-%d\n" % os.getpid())
         hub = self.spawn(["ethhub", "--listen", "127.0.0.1:%d" % HUB_PORT, "--tap", "tap0",
-                          "--pcap", self.path("lan.pcap")], "hub.out")
+                          "--pcap", self.path("lan.pcap")] + (["--key-file", keyfile] if keyfile else []), "hub.out")
         time.sleep(1.0)
         if not self.check("hub_up", hub.poll() is None, "ethhub on 127.0.0.1:%d + tap0" % HUB_PORT):
             return
@@ -318,7 +325,7 @@ class Run:
         open(self.path("run.dbg"), "w").write(script)
         speed = os.environ.get("E2E_SPEED", "")   # "": the emulator's default (--speed=4); see the docs
         emu = self.spawn(["stdbuf", "-oL", "-eL", "maxivmac", "--headless", "--silent", "--model=MacPlus", "--rom=" + ROM]
-                         + (["--speed=" + speed] if speed else []) + ["--scsi4=daynaport", "--eth=hub:127.0.0.1:%d" % HUB_PORT,
+                         + (["--speed=" + speed] if speed else []) + ["--scsi4=daynaport", "--eth=hub:127.0.0.1:%d%s" % (HUB_PORT, ",key=" + keyfile if keyfile else ""),
                           "--eth-mac=" + GUEST_MAC, "--dbg-script=" + self.path("run.dbg"), disk],
                          "emulator.out", env={"MAXIVMAC_OUT_DIR": self.shots})
         self.mark("emulator_started")

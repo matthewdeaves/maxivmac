@@ -146,6 +146,14 @@ maxivmac --scsi4=daynaport --eth=hub:127.0.0.1:5555 disk2.hfs     # another inst
   nothing later. IPv6 literals are not supported (the hub is IPv4 only).
 - A hello goes out at start and then every 5 s of **wall** time (the hub drops
   a client after 60 s of silence), however fast or slow the emulation runs.
+- **Key.** `--eth=hub:HOST:PORT,key=FILE` (or `MAXIVMAC_HUB_KEY_FILE=FILE`)
+  makes the hello the 13-byte keyed hello that a hub started with
+  `--key-file` requires (`ETHHUB.md`, Authentication; `eth_hub_auth.h`). FILE
+  must be mode 0600, 16..1024 bytes; a bad file means "no network" with a
+  message, never a silent plain hello. Without a key the wire is unchanged. A
+  keyed emulator against a hub without a key does not join (the hub drops the
+  hello as a short datagram); the clocks of the two hosts must agree to within
+  the hub's `--auth-window` (60 s).
 - Received frames go through the usual 64-frame drop-oldest queue. Datagrams
   from any source other than the hub, and datagrams of 1..13 or more than 1514
   bytes, are ignored and counted. Counters are printed to stderr when the
@@ -160,8 +168,9 @@ maxivmac --scsi4=daynaport --eth=hub:127.0.0.1:5555 disk2.hfs     # another inst
   of emulators) and prints it. Pass `--eth-mac` for a fixed, repeatable MAC
   (needed for repeatable scripted runs). The guest can still override it with
   the driver's set-MAC command; that is the guest's responsibility.
-- Tests: `test/test_eth_hub.cpp` (loopback fake hub, fake wall clock) and the
-  ctest `eth_hub_ethhub`, which starts the real `ethhub` and runs three
+- Tests: `test/test_eth_hub.cpp` (loopback fake hub, fake wall clock, the
+  RFC 4231 HMAC vectors, key files) and the
+  ctest `eth_hub_ethhub`, which (plain, then with a key) starts the real `ethhub` and runs three
   `EthHub` backends through broadcast, unicast and unknown-unicast flooding
   (`test/eth_hub_it.cpp`, driver `test/eth_hub_it.py`; needs `MAXIVMAC_ETHHUB`).
 - `--eth-latency` applies to hub frames too (default 10 ms of emulated time).

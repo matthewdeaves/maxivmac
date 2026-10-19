@@ -112,7 +112,7 @@ docker_run() {  # docker_run NAME RUNG OUTDIR
         --cpus "$CPUS" --memory "$MEM" --memory-swap "$MEM" --pids-limit "$PIDS" \
         --log-driver json-file --log-opt max-size=10m --log-opt max-file=3 \
         -v "$IN:/in:ro" -v "$3:/out" \
-        -e E2E_FLAT=1 -e E2E_TIMEOUT="$TMO" -e E2E_PEER="${E2E_PEER:-new}" -e E2E_SPEED="${E2E_SPEED:-}" \
+        -e E2E_FLAT=1 -e E2E_TIMEOUT="$TMO" -e E2E_PEER="${E2E_PEER:-new}" -e E2E_SPEED="${E2E_SPEED:-}" -e E2E_HUB_KEY="${E2E_HUB_KEY:-}" \
         "$E2E_IMAGE" "$2"
 }
 

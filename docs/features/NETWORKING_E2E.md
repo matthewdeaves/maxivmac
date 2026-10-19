@@ -133,6 +133,7 @@ is routed.
 | `PEERTALK_DIR_OLD` | optional second PeerTalk (e.g. an older commit via `git archive`), built as `/opt/peers/old`; use with `E2E_PEER=old` |
 | `E2E_OUT`, `E2E_IMAGE`, `E2E_REPEAT`, `E2E_CPUS`, `E2E_MEMORY`, `E2E_PIDS`, `E2E_TIMEOUT`, `E2E_EXPECT_FAIL` | see the header of `run.sh` |
 | `E2E_PEER`, `E2E_SPEED` | `old` selects the pre-fix POSIX peer; `E2E_SPEED` is the emulator's `--speed` |
+| `E2E_HUB_KEY` | `1`: the hub in the container runs with `--key-file` and the emulator joins with `,key=FILE` (the keyed hello); the rungs are otherwise unchanged |
 
 If an input is missing `run.sh` prints why and exits **77** (skip). Exit 0: all
 rungs passed, 1: a rung failed.
