@@ -1,146 +1,41 @@
 /*
 	Small Computer System Interface EMulated DeVice
 
-	Emulates the SCSI found in the Mac Plus.
-
-	This code adapted from "SCSI.c" in vMac by Philip Cummins.
+	Emulates the SCSI found in the Mac Plus.  This is the memory-mapped
+	adapter; the chip itself lives in ncr5380.{h,cpp}.
 */
-
-/* NCR5380 chip emulation by Yoav Shadmi, 1998 */
 
 #include "core/common.h"
 
 #include "devices/scsi.h"
 
-/* Global singleton */
+static Ncr5380::Lines makeLines()
+{
+	Ncr5380::Lines l;
+	/* The missing piece of the puzzle.. :) -- tell the Mac's low-memory
+	   hardware flags that SCSI reset occurred. */
+	l.onBusReset = []() { put_ram_word(0xb22, get_ram_word(0xb22) | 0x8000); };
+	return l;
+}
 
-#define scsiRd 0x00
-#define scsiWr 0x01
-
-#define sCDR 0x00	 /* current scsi data register  (r/o) */
-#define sODR 0x00	 /* output data register        (w/o) */
-#define sICR 0x02	 /* initiator command register  (r/w) */
-#define sMR 0x04	 /* mode register               (r/w) */
-#define sTCR 0x06	 /* target command register     (r/w) */
-#define sCSR 0x08	 /* current SCSI bus status     (r/o) */
-#define sSER 0x08	 /* select enable register      (w/o) */
-#define sBSR 0x0A	 /* bus and status register     (r/o) */
-#define sDMAtx 0x0A	 /* start DMA send              (w/o) */
-#define sIDR 0x0C	 /* input data register         (r/o) */
-#define sTDMArx 0x0C /* start DMA target receive    (w/o) */
-#define sRESET 0x0E	 /* reset parity/interrupt      (r/o) */
-#define sIDMArx 0x0E /* start DMA initiator receive (w/o) */
-
-static constexpr int kSCSI_Size = 0x00010;
-
-static uint8_t s_scsi[kSCSI_Size];
+SCSIDevice::SCSIDevice() : bus_(makeLines()) {}
 
 void SCSIDevice::reset()
 {
-	int i;
-
-	for (i = 0; i < kSCSI_Size; i++)
-	{
-		s_scsi[i] = 0;
-	}
-}
-
-/* Reset all NCR5380 registers to post-RST defaults and poke
-   the Mac g_ram SCSI flag so the driver knows reset occurred. */
-static void SCSI_BusReset()
-{
-	s_scsi[scsiRd + sCDR] = 0;
-	s_scsi[scsiWr + sODR] = 0;
-	s_scsi[scsiRd + sICR] = 0x80;
-	s_scsi[scsiWr + sICR] &= 0x80;
-	s_scsi[scsiRd + sMR] &= 0x40;
-	s_scsi[scsiWr + sMR] &= 0x40;
-	s_scsi[scsiRd + sTCR] = 0;
-	s_scsi[scsiWr + sTCR] = 0;
-	s_scsi[scsiRd + sCSR] = 0x80;
-	s_scsi[scsiWr + sSER] = 0;
-	s_scsi[scsiRd + sBSR] = 0x10;
-	s_scsi[scsiWr + sDMAtx] = 0;
-	s_scsi[scsiRd + sIDR] = 0;
-	s_scsi[scsiWr + sTDMArx] = 0;
-	s_scsi[scsiRd + sRESET] = 0;
-	s_scsi[scsiWr + sIDMArx] = 0;
-
-	/* The missing piece of the puzzle.. :) */
-	put_ram_word(0xb22, get_ram_word(0xb22) | 0x8000);
-}
-
-/* Run the NCR5380 state machine: handle arbitration, selection,
-   and bus-free phases based on written register values. */
-static void SCSI_Check()
-{
-	/*
-		The arbitration select/reselect scenario
-		[stub.. doesn't really work...]
-	*/
-	if ((s_scsi[scsiWr + sODR] >> 7) == 1)
-	{
-		/* Check if the Mac tries to be an initiator */
-		if ((s_scsi[scsiWr + sMR] & 1) == 1)
-		{
-			/* the Mac set arbitration in progress */
-			/*
-				stub! tell the mac that there
-				is arbitration in progress...
-			*/
-			s_scsi[scsiRd + sICR] |= 0x40;
-			/* ... that we didn't lose arbitration ... */
-			s_scsi[scsiRd + sICR] &= ~0x20;
-			/*
-				... and that there isn't a higher priority ID present...
-			*/
-			s_scsi[scsiRd + sCDR] = 0x00;
-
-			/*
-				... the arbitration and selection/reselection is
-				complete. the initiator tries to connect to the SCSI
-				device, fails and returns after timeout.
-			*/
-		}
-	}
-
-	/* check the chip registers, AS SET BY THE CPU */
-	if ((s_scsi[scsiWr + sICR] >> 7) == 1)
-	{
-		/* Check Assert RST */
-		SCSI_BusReset();
-	}
-	else
-	{
-		s_scsi[scsiRd + sICR] &= ~0x80;
-		s_scsi[scsiRd + sCSR] &= ~0x80;
-	}
-
-	if ((s_scsi[scsiWr + sICR] >> 2) == 1)
-	{
-		/* Check Assert SEL */
-		s_scsi[scsiRd + sCSR] |= 0x02;
-		s_scsi[scsiRd + sBSR] = 0x10;
-	}
-	else
-	{
-		s_scsi[scsiRd + sCSR] &= ~0x02;
-	}
+	bus_.reset();
 }
 
 uint32_t SCSIDevice::access(uint32_t Data, bool WriteMem, uint32_t addr)
 {
-	if (addr < (kSCSI_Size / 2))
+	if (addr < 8)
 	{
-		addr *= 2;
 		if (WriteMem)
 		{
-			s_scsi[addr + 1] = Data;
-			SCSI_Check();
+			bus_.write(static_cast<uint8_t>(addr), static_cast<uint8_t>(Data), false);
 		}
 		else
 		{
-			Data = s_scsi[addr];
+			Data = bus_.read(static_cast<uint8_t>(addr), false);
 		}
 	}
 	return Data;
