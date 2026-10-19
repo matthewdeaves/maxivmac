@@ -3421,8 +3421,8 @@ static void NeedDefaultLazyXFlagNegL()
 
 static void NeedDefaultLazyXFlagAsr()
 {
-	uint32_t cnt = V_regs.LazyFlagArgSrc;
-	uint32_t dst = V_regs.LazyFlagArgDst;
+	uint32_t cnt = V_regs.LazyXFlagArgSrc;
+	uint32_t dst = V_regs.LazyXFlagArgDst;
 
 	XFLG = ((dst >> (cnt - 1)) & 1);
 
@@ -3431,21 +3431,21 @@ static void NeedDefaultLazyXFlagAsr()
 
 static void NeedDefaultLazyXFlagAslB()
 {
-	XFLG = (V_regs.LazyFlagArgDst >> (8 - V_regs.LazyFlagArgSrc)) & 1;
+	XFLG = (V_regs.LazyXFlagArgDst >> (8 - V_regs.LazyXFlagArgSrc)) & 1;
 
 	V_regs.LazyXFlagKind = kLazyFlagsDefault;
 }
 
 static void NeedDefaultLazyXFlagAslW()
 {
-	XFLG = (V_regs.LazyFlagArgDst >> (16 - V_regs.LazyFlagArgSrc)) & 1;
+	XFLG = (V_regs.LazyXFlagArgDst >> (16 - V_regs.LazyXFlagArgSrc)) & 1;
 
 	V_regs.LazyXFlagKind = kLazyFlagsDefault;
 }
 
 static void NeedDefaultLazyXFlagAslL()
 {
-	XFLG = (V_regs.LazyFlagArgDst >> (32 - V_regs.LazyFlagArgSrc)) & 1;
+	XFLG = (V_regs.LazyXFlagArgDst >> (32 - V_regs.LazyXFlagArgSrc)) & 1;
 
 	V_regs.LazyXFlagKind = kLazyFlagsDefault;
 }
@@ -5596,7 +5596,7 @@ static void DoCodeRolL()
 		{
 			uint32_t dst = (uint32_t)dstvalue;
 
-			dst = (dst >> (32 - cnt)) | ((dst & ((1 << (32 - cnt)) - 1)) << cnt);
+			dst = (dst >> (32 - cnt)) | ((dst & ((1u << (32 - cnt)) - 1)) << cnt);
 
 			dstvalue = (uint32_t)(int32_t)(int32_t)dst;
 		}
