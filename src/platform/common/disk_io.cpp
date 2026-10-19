@@ -1,9 +1,13 @@
 #include "platform/common/disk_io.h"
 #include "util/macroman.h"
+#include "storage/startup_disks.h"
 
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <string>
+#include <system_error>
+#include <vector>
 
 FILE *g_drives[NumDrives];	   /* open disk image files */
 char *g_driveNames[NumDrives]; /* paths of open disk images */
@@ -87,6 +91,31 @@ tMacErr vSonyGetSize(DriveIndex driveNo, uint32_t *sonyCount)
 	}
 
 	return err; /*& figure out what really to return &*/
+}
+
+static StartupDisks s_startupDisks;
+
+void Sony_RememberStartupDisks()
+{
+	std::vector<std::string> paths;
+	for (DriveIndex i = 0; i < NumDrives; ++i)
+	{
+		if (!vSonyIsInserted(i) || g_driveNames[i] == nullptr) continue;
+		std::error_code ec;
+		auto abs = std::filesystem::absolute(g_driveNames[i], ec);
+		paths.push_back(ec ? std::string(g_driveNames[i]) : abs.string());
+	}
+	s_startupDisks.set(std::move(paths));
+}
+
+void Sony_RestoreStartupDisks()
+{
+	s_startupDisks.restore([](const std::string &p) {
+		std::string copy = p;
+		const bool ok = Sony_Insert1(copy.data(), false);
+		if (!ok) fprintf(stderr, "Warning: could not re-insert %s after reset\n", p.c_str());
+		return ok;
+	});
 }
 
 static tMacErr vSonyEject0(DriveIndex driveNo, bool deleteit)

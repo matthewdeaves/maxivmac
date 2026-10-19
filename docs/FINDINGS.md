@@ -233,3 +233,17 @@ the branch that found them.
 - Colima's ssh port forwarder does not carry UDP from the macOS host to a
   container, so the host-to-container path of ethhub was not exercised (see
   `docs/features/ETHHUB.md`).
+
+## 2026-10: MacTCP ping follow-up
+
+### F21. Restart left the guest without a disk
+
+- **Symptom:** after Special > Restart (or any reset) the Mac Plus showed the
+  flashing "?": `DoMacReset()` ejects every image and nothing put them back.
+  This blocks every flow that needs a restart to load a driver (MacTCP,
+  EtherTalk).
+- **Status:** fixed: the startup images (command line or `.mac`, drive order)
+  are re-inserted after the reset (`Sony_RestoreStartupDisks`). Applies to the
+  host Reboot action too. Not restored: images the user added later. Covered
+  by `test/scripts/restart_keeps_disk.dbg` (fails without the fix: the boot
+  never gets past the "?"). See `src/devices/SONY.md` 5.6.

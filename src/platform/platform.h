@@ -88,6 +88,10 @@ extern tMacErr vSonyEject(DriveIndex driveNo);
 extern tMacErr vSonyGetSize(DriveIndex driveNo, uint32_t *sonyCount);
 
 extern bool AnyDiskInserted();
+/* Remember the disk images inserted so far (drive order) as the startup
+   set, and put them back after a reset.  See storage/startup_disks.h. */
+extern void Sony_RememberStartupDisks();
+extern void Sony_RestoreStartupDisks();
 extern void DiskRevokeWritable(DriveIndex driveNo);
 
 extern bool g_sonyRawMode;

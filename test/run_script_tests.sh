@@ -105,6 +105,7 @@ fi
 
 expect "key and type edit a new folder name" type_verify.dbg 0 "script completed" disk
 expect "pick Apple menu item" menu_pick.dbg 0 "script completed" disk
+expect "Restart boots from the same disk again" restart_keeps_disk.dbg 0 "script completed" disk
 
 echo ""
 echo "PASS: $PASS  FAIL: $FAIL  SKIP: $SKIP"

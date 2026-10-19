@@ -296,6 +296,20 @@ Finder / application calls _Eject
           → if s_quitOnEject && no disks left: g_forceMacOff = true
 ```
 
+### 5.6 Reset keeps the startup disks
+
+A reset (Special > Restart or Shut Down -> restart, via the guest's RESET
+instruction, and the host Reboot action) runs `DoMacReset()`: eject every
+image, zap the hardware, then `Sony_RestoreStartupDisks()` re-inserts the
+images the machine was started with, in drive order (`StartupDisks`,
+`storage/startup_disks.h`; the list is taken by `Sony_RememberStartupDisks()`
+once the command-line / `.mac` images are inserted).  Without this the ROM
+found no disk after a Restart and showed the flashing "?".  Images added later
+(drag and drop, Open dialog) are not in the list and stay ejected by a reset;
+a user eject during a session is unaffected until the next reset, which brings
+the startup images back.  An image that cannot be reopened is skipped with a
+warning.  Script test: `test/scripts/restart_keeps_disk.dbg`.
+
 ---
 
 ## 6. Disk Image Format Detection

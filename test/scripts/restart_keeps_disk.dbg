@@ -1,0 +1,17 @@
+# Special > Restart must boot from the same disk image again: without the
+# image a Mac Plus shows a flashing '?' and never draws "Welcome to Macintosh."
+# or the Finder.  (Mouse gesture: mousedown on the menu title, glide to the
+# item, release; the Special menu's Restart row is at y=107.)
+set default-timeout 120s
+showtext on
+wait text "Special"
+wait for 3s
+mousedown 178 9
+wait for 1s
+move 190 107
+wait for 1s
+mouseup
+wait text "Welcome to Macintosh"
+wait text "Special"
+wait for 2s
+screenshot "restart_finder"

@@ -73,8 +73,13 @@ static void EmulatedHardwareZap()
 
 static void DoMacReset()
 {
+	/* A reset ejects every image (the guest forgets all mounts) and the
+	   startup images come back afterwards, in drive order, so a Restart
+	   boots from the same disks instead of showing the flashing '?'.  They go
+	   in after the zap: Sony reset() clears the pending-insert state. */
 	if (auto *d = g_rig->findDevice<SonyDevice>()) d->ejectAllDisks();
 	EmulatedHardwareZap();
+	Sony_RestoreStartupDisks();
 }
 
 // Process interrupt-button and reset-button requests once per tick.

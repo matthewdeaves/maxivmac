@@ -262,6 +262,7 @@ bool EmulatorShell::initMachine()
 	{
 		(void)Sony_Insert1(const_cast<char *>(diskPath.c_str()), false);
 	}
+	Sony_RememberStartupDisks();
 
 	if (!ProgramMain()) return false;
 
