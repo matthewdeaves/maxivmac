@@ -113,8 +113,13 @@ maxivmac --model=MacPlus --scsi4=daynaport --eth=slirp disk.hfs
 The adapter sits on an emulated NCR5380 SCSI bus that accepts targets at any
 ID ([docs/features/SCSI.md](docs/features/SCSI.md)).  For a shared virtual
 LAN between several emulators and POSIX peers, `tools/ethhub` is a small UDP
-Ethernet hub ([docs/features/ETHHUB.md](docs/features/ETHHUB.md); the emulator
-does not have a hub backend yet).
+Ethernet hub and `--eth=hub:HOST:PORT` connects the emulator to it
+([docs/features/ETHHUB.md](docs/features/ETHHUB.md)). **ethhub has no
+authentication or rate limiting: keep it on loopback or a trusted network.**
+
+`daynaport,multiframe` is experimental (not verified against real software).
+Everything this fork adds over upstream, and the behaviour changes, are
+listed in [docs/FORK-CHANGES.md](docs/FORK-CHANGES.md).
 
 <!-- ![SLIP demo](media/demo-slip.gif) -->
 > 🎬 *Demo needed — see [media/MEDIA_NEEDED.md](media/MEDIA_NEEDED.md)*

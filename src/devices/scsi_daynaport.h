@@ -4,8 +4,10 @@
 	The command set (INQUIRY, REQUEST SENSE, READ 0x08, GET MAC 0x09,
 	WRITE 0x0A, receive mode 0x0C, multicast 0x0D, ENABLE 0x0E, ...) and the
 	record layouts follow the Mini vMac DaynaPORT fork by Mikhail Kandel
-	(src/DAYNAPRT.h), GPL-2.0-only, which in turn follows BlueSCSI-v2's
-	network.c and the PiSCSI "Dayna Port Command Set" notes.  This is a
+	(src/DAYNAPRT.h), GPL-2.0-only.  The protocol facts (command opcodes, the
+	record layout, flag values) are as documented by BlueSCSI-v2 and the
+	PiSCSI "Dayna Port Command Set" notes, which the donor cites as its
+	references; no BlueSCSI or PiSCSI source is copied here.  This is a
 	re-implementation as a target on maxivmac's own NCR5380 bus model; the
 	donor's NCR5380 (SCSIDNPT.h) is not used.
 

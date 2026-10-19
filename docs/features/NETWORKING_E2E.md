@@ -242,7 +242,7 @@ after the guest quit (test_mesh redials) breaking an "exactly one SYN" check,
 which now counts answered connections.
 
 Evidence stays outside the repository (`e2e-out/` is git-ignored): on the
-author's machine `/Users/matt/Documents/worktrees/maxivmac-e2e/e2e-out/final2/`
+author's machine `e2e-out/final2/` (in the e2e worktree)
 (runs `a`: R1 R2b, `b`: R2 R4, `c`: R3 R3b, `<label>/<rung>-<n>/`) and
 `.../e2e-out/old/` (the controls). Each holds `summary.json`, `lan.pcap`,
 `hub.out`, `capture.log`, `PT_test_mesh.txt` (the guest's PT_Log, read back from

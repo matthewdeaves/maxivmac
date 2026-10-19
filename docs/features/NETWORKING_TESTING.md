@@ -12,6 +12,10 @@ export MAXIVMAC_PING=~/Downloads/MacTCP_Ping_2.0.2.sea_.bin
 test/net/run-ping.sh bld/macos/maxivmac          # or: ctest -R net_ping
 ```
 
+Both tests carry the ctest label `net` and can run up to 15 / 25 minutes when
+their inputs exist; skip them with `ctest -LE net` (or run only them with
+`ctest -L net`). Without the inputs they skip (exit 77) in a moment.
+
 About 10 s to prepare the disk (once, cached) and 50 s per run on an M-series
 Mac at the emulator's maximum headless speed.
 

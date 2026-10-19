@@ -6,7 +6,7 @@
 # Environment (nothing is fetched, PeerTalk is only read):
 #   PEERTALK_DIR     PeerTalk checkout (read-only input)           required
 #   CLOG_DIR         clog sources                                   required
-#   RETRO68_DIR      Retro68 toolchain prefix (default /Users/matt/Retro68-build/toolchain)
+#   RETRO68_DIR      Retro68 toolchain prefix required (e.g. ~/Retro68-build/toolchain)
 #   RETRO68_REZ      a working Rez, if the toolchain's own does not run (optional)
 #
 # Writes OUTDIR/<app>.bin (MacBinary, both forks) for add-apps.sh.  Exit 77 = skip.
@@ -14,7 +14,8 @@ set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 OUT="${1:?usage: build-peertalk-68k.sh OUTDIR [app ...]}"; shift || true
 APPS=("$@"); [ ${#APPS[@]} -gt 0 ] || APPS=(test_mesh test_chat)
-R68="${RETRO68_DIR:-/Users/matt/Retro68-build/toolchain}"
+[ -n "${RETRO68_DIR:-}" ] || die "RETRO68_DIR is not set: point it at the Retro68 toolchain prefix (the directory holding m68k-apple-macos/)"
+R68="$RETRO68_DIR"
 [ -n "${PEERTALK_DIR:-}" ] && [ -f "$PEERTALK_DIR/CMakeLists.txt" ] || skip "PeerTalk checkout not found (set \$PEERTALK_DIR)"
 [ -n "${CLOG_DIR:-}" ] && [ -f "$CLOG_DIR/CMakeLists.txt" ] || skip "clog not found (set \$CLOG_DIR)"
 TC="$R68/m68k-apple-macos/cmake/retro68.toolchain.cmake"

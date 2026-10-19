@@ -57,7 +57,8 @@ the backend.
 ## What the target does differently from the donor
 
 The command set comes from the Mini vMac DaynaPORT fork by Mikhail Kandel
-(GPL-2.0-only), itself following BlueSCSI-v2 and the PiSCSI Dayna Port notes.
+(GPL-2.0-only), whose protocol references are BlueSCSI-v2 and the PiSCSI Dayna Port notes
+(protocol facts only; no code from either is copied here).
 Fixes, each with a test in `test/test_daynaport.cpp`:
 
 1. READ peeks the next frame's size before dequeueing. A frame that cannot
@@ -121,7 +122,8 @@ clock (TCP retransmit and ARP timers) while `poll()` runs once per emulated
 tick. At high `--speed` the guest runs many times faster than real time, so
 network round trips look very slow to it, MacTCP may time out and
 retransmit in bursts ("retransmit storms"), and a stalled host leaves the guest
-believing the network is gone. Keep the speed at 1x for networking until this
+believing the network is gone. On the Mac SE, AppleTalk start-up needs `--speed=0` (real-time) or it bombs with
+"divide by zero" (FINDINGS F41). Keep the speed at 1x for networking until this
 is measured with MacTCP. libslirp's timers are fired from `poll()` (their
 expiry is in milliseconds on the clock `clock_get_ns()` reports in nanoseconds).
 

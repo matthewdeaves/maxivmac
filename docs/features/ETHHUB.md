@@ -111,7 +111,7 @@ out, e.g. for a peer that needs raw sockets; `docker exec` still gives root).
 
 ### How PeerTalk will plug in
 
-`/Users/matt/Documents/peertalk/docker/Dockerfile.posix` is a plain
+PeerTalk's `docker/Dockerfile.posix` is a plain
 `ubuntu:22.04` build/test image (build-essential, python, lcov, cppcheck; code
 mounted at `/workspace`, `CMD /bin/bash`); it has no networking set-up. The
 PeerTalk peer image will be a new image that adds `iproute2`, builds
