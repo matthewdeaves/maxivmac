@@ -5,9 +5,10 @@ the host network or the internet.
 
 ## Architecture
 
-MacTCP on System 6 supports SLIP over serial.  The Mac side is
-standard, well-documented, and requires no custom driver — just
-MacTCP + a SLIP configuration pointing at the modem/printer port.
+MacTCP on System 6 can run over SLIP via a third-party link driver
+(InterSLIP or MacSLIP); MacTCP 2.0.6 itself only supports LocalTalk and
+Ethernet.  The Mac side is standard and well-documented — MacTCP + a
+SLIP driver configured for the modem/printer port.
 
 The emulator side needs:
 

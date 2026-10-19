@@ -92,7 +92,7 @@ control panel.  The host window resizes automatically.
 ### SLIP networking
 
 Connect the emulated Mac to the host's internet over a virtual serial port
-using MacTCP 2.0.6 and built-in SLIP.  Runs Netscape 2.0, FTP, Telnet, and
+using MacTCP 2.0.6 with a third-party SLIP driver (InterSLIP or MacSLIP).  Runs Netscape 2.0, FTP, Telnet, and
 anything else that speaks MacTCP — on System 6.0.8 and a Mac Plus.
 
 ```sh
