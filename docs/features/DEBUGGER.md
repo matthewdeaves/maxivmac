@@ -703,11 +703,12 @@ A scheduler unit is 1/64 of a 68000 clock cycle; a Mac Plus runs
 ```
 
 `wait text` matches against text captured from DrawString, DrawText,
-StdText, and TextBox traps.  Text is converted from MacRoman to UTF-8
-before matching.
+StdText, TextBox and ParamText traps as the guest draws it (so it only
+sees text drawn after the wait starts).  Text is converted from MacRoman
+to UTF-8 before matching.  See [SCRIPTING.md](SCRIPTING.md#break-text).
 
-`wait screen` performs OCR on the current frame buffer and does a
-substring match on the recognized text.
+`wait screen` compares the frame buffer with a reference PNG pixel by
+pixel (default threshold 99.85%); it does no text recognition.
 
 `wait for` simply pauses script execution for the given number of
 cycles, allowing the guest to run freely.

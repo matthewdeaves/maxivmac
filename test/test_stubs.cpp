@@ -86,5 +86,15 @@ void dbg_printf(const char *fmt, ...)
 
 /* ── Scripting stubs ──────────────────────────────────── */
 
+#include <string>
 #include <string_view>
-void ScriptCaptureText(std::string_view, std::string_view) {}
+#include <utility>
+#include <vector>
+
+/* Records (text, trapName) pairs so tests can check what the tracer captured. */
+std::vector<std::pair<std::string, std::string>> g_capturedText;
+
+void ScriptCaptureText(std::string_view text, std::string_view trapName)
+{
+	g_capturedText.emplace_back(std::string(text), std::string(trapName));
+}
