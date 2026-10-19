@@ -199,8 +199,9 @@ void PrintUsage(const char *progname)
 			"                   02:6d:78:xx:xx:xx on a hub, so emulators sharing one do not collide)\n"
 			"  --eth-latency=D  Minimum delay of received frames on the emulated clock\n"
 			"                   (default 10ms; e.g. 500us, 1s; 0 = off)\n"
-			"  --net-redir=SPEC Port forward for slirp (SLIP or --eth): tcp:hostport:guestip:guestport\n"
-			"                   (--slip-redir is an alias)\n"
+			"  --net-redir=SPEC Port forward for slirp (SLIP or --eth): tcp:[hostip:]hostport:guestip:guestport\n"
+			"                   Loopback only unless hostip is given (0.0.0.0 = every interface).\n"
+			"                   (--slip-redir is an alias that, as upstream, listens on all interfaces)\n"
 			"  --disk-snapshot  Never write to disk images: the guest works on a temporary copy of each\n"
 			"                   (discarded at exit; makes repeated runs on one image identical)\n"
 			"  --shared=PATH    Mount host directory as shared drive (repeatable)\n"
@@ -405,7 +406,7 @@ LaunchConfig ParseCommandLine(int argc, char *argv[])
 		}
 		if (strncmp(arg, "--slip-redir=", 13) == 0) // former name of --net-redir
 		{
-			lc.netRedirs.push_back(arg + 13);
+			lc.netRedirs.push_back(legacyRedirAllInterfaces(arg + 13)); // upstream: all interfaces
 			continue;
 		}
 		if (strncmp(arg, "--eth=", 6) == 0)

@@ -56,6 +56,35 @@ TEST_CASE("eth spec: the legacy --slip-redir form still parses")
 	CHECK_FALSE(parseNetRedir("8080:10.0.2.15:80", f));
 }
 
+TEST_CASE("eth spec: --net-redir takes an optional host IP")
+{
+	HostFwdSpec f;
+	REQUIRE(parseNetRedir("tcp:0.0.0.0:8080:10.0.2.15:80", f));
+	CHECK(f.hostIp == "0.0.0.0");
+	CHECK(f.hostPort == 8080);
+	CHECK(f.guestIp == "10.0.2.15");
+	CHECK(f.guestPort == 80);
+	REQUIRE(parseNetRedir("udp:192.168.1.5:53:10.0.2.15:53", f));
+	CHECK(f.udp);
+	CHECK(f.hostIp == "192.168.1.5");
+	REQUIRE(parseNetRedir("tcp:8080:10.0.2.15:80", f));
+	CHECK(f.hostIp.empty());
+	CHECK_FALSE(parseNetRedir("tcp::8080:10.0.2.15:80", f));	   // empty host IP
+	CHECK_FALSE(parseNetRedir("tcp:host:8080:10.0.2.15:80", f));  // not a dotted quad
+	CHECK_FALSE(parseNetRedir("tcp:1.2.3.4:8080:10.0.2.15:80:1", f));
+}
+
+TEST_CASE("eth spec: --slip-redir keeps upstream's all-interfaces binding")
+{
+	CHECK(legacyRedirAllInterfaces("tcp:8080:10.0.2.15:80") == "tcp:0.0.0.0:8080:10.0.2.15:80");
+	CHECK(legacyRedirAllInterfaces("udp:53:10.0.2.15:53") == "udp:0.0.0.0:53:10.0.2.15:53");
+	CHECK(legacyRedirAllInterfaces("tcp:127.0.0.1:8080:10.0.2.15:80") == "tcp:127.0.0.1:8080:10.0.2.15:80");
+	CHECK(legacyRedirAllInterfaces("garbage") == "garbage");
+	HostFwdSpec f;
+	REQUIRE(parseNetRedir(legacyRedirAllInterfaces("tcp:8080:10.0.2.15:80"), f));
+	CHECK(f.hostIp == "0.0.0.0");
+}
+
 TEST_CASE("eth spec: MAC parsing")
 {
 	std::array<uint8_t, 6> m{};

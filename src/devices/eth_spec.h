@@ -33,8 +33,13 @@ struct HostFwdSpec
 
 // "tcp::8080-10.0.2.15:80".  Returns false on a malformed spec.
 bool parseHostFwd(std::string_view s, HostFwdSpec &out);
-// "tcp:8080:10.0.2.15:80" (the former --slip-redir form).
+// "tcp:[HOSTIP:]8080:10.0.2.15:80" (--net-redir / --slip-redir).  Without a
+// HOSTIP, hostIp stays empty, which the stack treats as loopback only.
 bool parseNetRedir(std::string_view s, HostFwdSpec &out);
+// --slip-redir kept upstream's behaviour of listening on every interface.  This
+// rewrites a spec without a HOSTIP to an explicit 0.0.0.0 one (compat); a spec
+// that already names a HOSTIP, or does not parse, is returned unchanged.
+std::string legacyRedirAllInterfaces(const std::string &spec);
 // "02:00:00:aa:bb:cc" (':' or '-'); rejects multicast (bit 0 of the first octet).
 bool parseMac(std::string_view s, std::array<uint8_t, 6> &out);
 

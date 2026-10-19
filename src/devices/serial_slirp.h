@@ -33,6 +33,7 @@ public:
 
 	/* Add a host->guest port forward.  Call after construction. */
 	bool addHostFwd(bool isUDP, uint16_t hostPort, const char *guestIP, uint16_t guestPort);
+	bool addHostFwd(bool isUDP, const char *hostAddr, uint16_t hostPort, const char *guestIP, uint16_t guestPort);
 
 private:
 	void handleArp(const uint8_t *frame, size_t len);

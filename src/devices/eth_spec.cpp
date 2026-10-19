@@ -79,18 +79,45 @@ bool parseHostFwd(std::string_view s, HostFwdSpec &out)
 
 bool parseNetRedir(std::string_view s, HostFwdSpec &out)
 {
+	// proto:[HOSTIP:]hostport:guestip:guestport
 	HostFwdSpec r;
 	if (!parseProto(s, r.udp)) return false;
-	const size_t c1 = s.find(':');
-	const size_t c2 = s.rfind(':');
-	if (c1 == std::string_view::npos || c2 == c1) return false;
-	if (!parsePort(s.substr(0, c1), r.hostPort)) return false;
-	const std::string_view ip = s.substr(c1 + 1, c2 - c1 - 1);
-	if (!validIpv4(ip)) return false;
-	r.guestIp = std::string(ip);
-	if (!parsePort(s.substr(c2 + 1), r.guestPort)) return false;
+	std::string_view f[4];
+	int n = 0;
+	for (;;)
+	{
+		if (n == 4) return false;
+		const size_t c = s.find(':');
+		if (c == std::string_view::npos)
+		{
+			f[n++] = s;
+			break;
+		}
+		f[n++] = s.substr(0, c);
+		s.remove_prefix(c + 1);
+	}
+	if (n < 3) return false;
+	int k = 0;
+	if (n == 4)
+	{
+		if (!validIpv4(f[0])) return false; // an explicit host IP may not be empty
+		r.hostIp = std::string(f[0]);
+		k = 1;
+	}
+	if (!parsePort(f[k], r.hostPort)) return false;
+	if (!validIpv4(f[k + 1])) return false;
+	r.guestIp = std::string(f[k + 1]);
+	if (!parsePort(f[k + 2], r.guestPort)) return false;
 	out = r;
 	return true;
+}
+
+std::string legacyRedirAllInterfaces(const std::string &spec)
+{
+	HostFwdSpec f;
+	if (!parseNetRedir(spec, f) || !f.hostIp.empty()) return spec;
+	return std::string(f.udp ? "udp:" : "tcp:") + "0.0.0.0:" + std::to_string(f.hostPort) + ":" + f.guestIp + ":" +
+		   std::to_string(f.guestPort);
 }
 
 bool parseMac(std::string_view s, std::array<uint8_t, 6> &out)

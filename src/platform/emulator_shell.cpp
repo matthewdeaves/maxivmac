@@ -43,7 +43,8 @@
 
 /* Apply --net-redir= (alias --slip-redir=) specs to a serial backend (only if
    it's a SlirpBackend).  --eth=slirp applies them itself in CreateEthBackend.
-   Spec format: "tcp:hostport:guestip:guestport" or "udp:..." */
+   Spec format: "tcp:[hostip:]hostport:guestip:guestport" or "udp:..."; no
+   hostip means loopback only. */
 static void ApplyNetRedirs(SerialBackend *backend, const std::vector<std::string> &redirs)
 {
 #if HAVE_SLIRP
@@ -59,7 +60,7 @@ static void ApplyNetRedirs(SerialBackend *backend, const std::vector<std::string
 			fprintf(stderr, "[NET] bad --net-redir spec: %s\n", spec.c_str());
 			continue;
 		}
-		slirp->addHostFwd(f.udp, f.hostPort, f.guestIp.c_str(), f.guestPort);
+		slirp->addHostFwd(f.udp, f.hostIp.c_str(), f.hostPort, f.guestIp.c_str(), f.guestPort);
 	}
 #else
 	(void)backend;

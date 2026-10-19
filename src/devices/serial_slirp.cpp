@@ -190,4 +190,10 @@ bool SlirpBackend::addHostFwd(bool isUDP, uint16_t hostPort, const char *guestIP
 	return stack_.addHostFwd(isUDP, hostPort, guestIP, guestPort);
 }
 
+bool SlirpBackend::addHostFwd(bool isUDP, const char *hostAddr, uint16_t hostPort, const char *guestIP,
+							  uint16_t guestPort)
+{
+	return stack_.addHostFwd(isUDP, hostAddr, hostPort, guestIP, guestPort);
+}
+
 #endif /* HAVE_SLIRP */
