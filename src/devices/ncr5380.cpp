@@ -28,6 +28,7 @@ Ncr5380::Ncr5380(Lines lines) : lines_(std::move(lines)) {}
 
 void Ncr5380::reset()
 {
+	if (real_) realReset();
 	for (int i = 0; i < kRegBytes; i++)
 	{
 		s_[i] = 0;
@@ -117,13 +118,358 @@ void Ncr5380::legacyCheck()
 	}
 }
 
-uint8_t Ncr5380::read(uint8_t reg, bool /*dack*/)
+uint8_t Ncr5380::read(uint8_t reg, bool dack)
 {
+	if (real_) return realRead(reg & 7, dack);
 	return s_[(reg & 7) * 2 + scsiRd];
 }
 
-void Ncr5380::write(uint8_t reg, uint8_t v, bool /*dack*/)
+void Ncr5380::write(uint8_t reg, uint8_t v, bool dack)
 {
+	if (real_)
+	{
+		realWrite(reg & 7, v, dack);
+		return;
+	}
 	s_[(reg & 7) * 2 + scsiWr] = v;
 	legacyCheck();
+}
+
+/* ======================================================================
+   Real bus model.  Register numbers (A0-A2):
+	 read : 0 CSD  1 ICR  2 MR  3 TCR  4 CSBS  5 BSR  6 IDR  7 reset irq
+	 write: 0 ODR  1 ICR  2 MR  3 TCR  4 SER   5 DMA tx 6 DMA tgt rx 7 DMA init rx
+   ICR: 7 RST 6 AIP(r) 5 LA(r) 4 ACK 3 BSY 2 SEL 1 ATN 0 data bus enable
+   MR : 6 target mode 2 monitor busy 1 DMA mode 0 arbitrate
+   TCR: 2 MSG 1 C/D 0 I/O (expected phase)
+   CSBS: 7 RST 6 BSY 5 REQ 4 MSG 3 C/D 2 I/O 1 SEL
+   BSR: 7 end of DMA 6 DRQ 4 IRQ 3 phase match 2 busy error 1 ATN 0 ACK
+   ====================================================================== */
+
+namespace
+{
+constexpr uint8_t kIcrRst = 0x80, kIcrAip = 0x40, kIcrLa = 0x20, kIcrAck = 0x10, kIcrBsy = 0x08,
+				  kIcrSel = 0x04, kIcrAtn = 0x02, kIcrData = 0x01;
+constexpr uint8_t kMrDma = 0x02, kMrArb = 0x01;
+constexpr uint8_t kBitIO = 1, kBitCD = 2, kBitMSG = 4;
+} // namespace
+
+void Ncr5380::attach(int id, scsi::ScsiTarget *t)
+{
+	if (id < 0 || id > 6) return;
+	targets_[id] = t;
+	bool any = false;
+	for (auto *p : targets_) any = any || p != nullptr;
+	if (any != real_)
+	{
+		real_ = any;
+		realReset();
+	}
+}
+
+void Ncr5380::realReset()
+{
+	odr_ = icr_ = mr_ = tcr_ = ser_ = 0;
+	aip_ = la_ = false;
+	phase_ = Phase::Free;
+	req_ = ackPending_ = dmaActive_ = false;
+	sel_ = -1;
+	for (auto *t : targets_)
+		if (t) t->busReset();
+}
+
+void Ncr5380::realBusReset()
+{
+	for (auto *t : targets_)
+		if (t) t->busReset();
+	phase_ = Phase::Free;
+	req_ = ackPending_ = dmaActive_ = false;
+	sel_ = -1;
+	aip_ = la_ = false;
+	if (lines_.onBusReset) lines_.onBusReset();
+}
+
+uint8_t Ncr5380::phaseBits() const
+{
+	switch (phase_)
+	{
+	case Phase::MsgOut: return kBitMSG | kBitCD;
+	case Phase::Command: return kBitCD;
+	case Phase::DataIn: return kBitIO;
+	case Phase::Status: return kBitCD | kBitIO;
+	case Phase::MsgIn: return kBitMSG | kBitCD | kBitIO;
+	default: return 0; /* Free, Selected, DataOut */
+	}
+}
+
+uint8_t Ncr5380::busData() const
+{
+	switch (phase_)
+	{
+	case Phase::DataIn: return inPos_ < in_.size() ? in_[inPos_] : 0;
+	case Phase::Status: return statusByte_;
+	case Phase::MsgIn: return 0; /* COMMAND COMPLETE */
+	default: return (aip_ || (icr_ & kIcrData)) ? odr_ : 0;
+	}
+}
+
+bool Ncr5380::dmaRequest() const
+{
+	return dmaActive_ && (mr_ & kMrDma) && req_ && phaseMatch();
+}
+
+void Ncr5380::setPhase(Phase p, bool req)
+{
+	phase_ = p;
+	req_ = req;
+}
+
+void Ncr5380::startArbitration()
+{
+	aip_ = true;
+	la_ = false;
+}
+
+void Ncr5380::checkSelect()
+{
+	if (phase_ != Phase::Free) return;
+	if (!(icr_ & kIcrSel) || (icr_ & kIcrBsy) || aip_) return;
+	const uint8_t data = (icr_ & kIcrData) ? odr_ : 0;
+	for (int id = 0; id < 7; id++)
+	{
+		if ((data & (1 << id)) && targets_[id])
+		{
+			sel_ = id;
+			identified_ = false;
+			lun_ = 0;
+			setPhase(Phase::Selected, false); /* target asserts BSY */
+			return;
+		}
+	}
+	/* Absent ID: nobody answers, BSY never rises, the driver times out. */
+}
+
+void Ncr5380::handleMessage(uint8_t m)
+{
+	if (m & 0x80)
+	{
+		identified_ = true;
+		lun_ = m & 7;
+	}
+	else if (m == 0x06) /* ABORT */
+	{
+		targets_[sel_]->abort();
+		setPhase(Phase::Free, false);
+	}
+	else if (m == 0x0C) /* BUS DEVICE RESET */
+	{
+		targets_[sel_]->busReset();
+		setPhase(Phase::Free, false);
+	}
+	/* other messages (NOP etc.) are accepted and ignored */
+}
+
+void Ncr5380::enterStep(const scsi::Step &first)
+{
+	scsi::Step s = first;
+	scsi::ScsiTarget *t = targets_[sel_];
+	for (int guard = 0; guard < 4096; guard++)
+	{
+		switch (s.kind)
+		{
+		case scsi::Step::DataIn:
+			if (s.in.empty())
+			{
+				s = t->dataInDone();
+				continue;
+			}
+			in_ = s.in;
+			inPos_ = 0;
+			setPhase(Phase::DataIn, true);
+			return;
+		case scsi::Step::DataOut:
+			if (s.out.empty())
+			{
+				s = t->dataOutDone();
+				continue;
+			}
+			out_ = s.out;
+			outPos_ = 0;
+			setPhase(Phase::DataOut, true);
+			return;
+		case scsi::Step::StatusPhase:
+			statusByte_ = static_cast<uint8_t>(s.status);
+			setPhase(Phase::Status, true);
+			return;
+		}
+	}
+	/* Runaway target: terminate the command. */
+	statusByte_ = static_cast<uint8_t>(scsi::Status::CheckCondition);
+	setPhase(Phase::Status, true);
+}
+
+/* ACK asserted: the byte offered (or requested) in the current phase is
+   transferred.  REQ drops. */
+void Ncr5380::ackRise()
+{
+	if (!req_) return;
+	switch (phase_)
+	{
+	case Phase::MsgOut: handleMessage(odr_); break;
+	case Phase::Command:
+		cdb_.push_back(odr_);
+		if (cdb_.size() == 1)
+		{
+			const unsigned group = odr_ >> 5;
+			cdbLen_ = group == 0 ? 6 : group == 1 || group == 2 ? 10 : group == 5 ? 12 : group == 4 ? 16 : 6;
+		}
+		break;
+	case Phase::DataOut:
+		if (outPos_ < out_.size()) out_[outPos_++] = odr_;
+		break;
+	case Phase::DataIn: inPos_++; break;
+	default: break;
+	}
+	req_ = false;
+	ackPending_ = true;
+}
+
+/* ACK released: the target moves on and asserts REQ for the next byte or
+   phase. */
+void Ncr5380::ackFall()
+{
+	if (!ackPending_) return;
+	ackPending_ = false;
+	scsi::ScsiTarget *t = sel_ >= 0 ? targets_[sel_] : nullptr;
+	if (!t || phase_ == Phase::Free) return;
+	switch (phase_)
+	{
+	case Phase::MsgOut:
+		if (icr_ & kIcrAtn)
+			req_ = true; /* more message bytes */
+		else
+		{
+			cdb_.clear();
+			setPhase(Phase::Command, true);
+		}
+		break;
+	case Phase::Command:
+		if (cdb_.size() < cdbLen_)
+			req_ = true;
+		else
+		{
+			const uint8_t lun = identified_ ? lun_ : (cdb_.size() > 1 ? cdb_[1] >> 5 : 0);
+			enterStep(t->command(lun, cdb_));
+		}
+		break;
+	case Phase::DataOut:
+		if (outPos_ < out_.size())
+			req_ = true;
+		else
+			enterStep(t->dataOutDone());
+		break;
+	case Phase::DataIn:
+		if (inPos_ < in_.size())
+			req_ = true;
+		else
+			enterStep(t->dataInDone());
+		break;
+	case Phase::Status: setPhase(Phase::MsgIn, true); break;
+	case Phase::MsgIn:
+		setPhase(Phase::Free, false);
+		sel_ = -1;
+		break;
+	default: break;
+	}
+}
+
+uint8_t Ncr5380::realRead(uint8_t reg, bool dack)
+{
+	switch (reg)
+	{
+	case 0:
+	case 6:
+		if (reg == 0 && dack && dmaRequest() && (phaseBits() & kBitIO))
+		{
+			const uint8_t b = busData();
+			ackRise();
+			ackFall();
+			return b;
+		}
+		return busData();
+	case 1: return (icr_ & ~(kIcrAip | kIcrLa)) | (aip_ ? kIcrAip : 0) | (la_ ? kIcrLa : 0);
+	case 2: return mr_;
+	case 3: return tcr_;
+	case 4:
+	{
+		const bool bsy = phase_ != Phase::Free || (icr_ & kIcrBsy) || aip_;
+		uint8_t v = icr_ & kIcrRst;
+		if (bsy) v |= 0x40;
+		if (req_) v |= 0x20;
+		v |= static_cast<uint8_t>(phaseBits() << 2);
+		if (icr_ & kIcrSel) v |= 0x02;
+		return v;
+	}
+	case 5:
+	{
+		uint8_t v = 0;
+		if (dmaRequest()) v |= 0x40;
+		if (phaseMatch()) v |= 0x08;
+		if (icr_ & kIcrAtn) v |= 0x02;
+		if (icr_ & kIcrAck) v |= 0x01;
+		return v;
+	}
+	default: return 0;
+	}
+}
+
+void Ncr5380::realWrite(uint8_t reg, uint8_t v, bool dack)
+{
+	switch (reg)
+	{
+	case 0:
+		odr_ = v;
+		if (dack && dmaRequest() && !(phaseBits() & kBitIO))
+		{
+			ackRise();
+			ackFall();
+		}
+		break;
+	case 1:
+	{
+		const uint8_t old = icr_;
+		icr_ = v & ~(kIcrAip | kIcrLa);
+		if ((v & kIcrRst) && !(old & kIcrRst))
+		{
+			realBusReset();
+			break;
+		}
+		if (!(old & kIcrAck) && (v & kIcrAck)) ackRise();
+		if ((old & kIcrAck) && !(v & kIcrAck)) ackFall();
+		if (phase_ == Phase::Selected && !(v & kIcrSel))
+		{
+			cdb_.clear();
+			setPhase((v & kIcrAtn) ? Phase::MsgOut : Phase::Command, true);
+		}
+		checkSelect();
+		break;
+	}
+	case 2:
+	{
+		const uint8_t old = mr_;
+		mr_ = v;
+		if ((v & kMrArb) && !(old & kMrArb)) startArbitration();
+		if (!(v & kMrArb)) aip_ = la_ = false;
+		if (!(v & kMrDma)) dmaActive_ = false;
+		checkSelect();
+		break;
+	}
+	case 3: tcr_ = v & 0x0F; break;
+	case 4: ser_ = v; break;
+	case 5:
+	case 6:
+	case 7:
+		if (mr_ & kMrDma) dmaActive_ = true;
+		break;
+	}
 }
