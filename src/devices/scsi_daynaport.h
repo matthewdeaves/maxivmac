@@ -62,6 +62,7 @@ private:
 
 	bool accepts(std::span<const uint8_t> frame) const;
 	scsi::Step handle(uint8_t lun);
+	scsi::Step handleDataOut();
 	scsi::Step error(uint8_t senseKey);
 	scsi::Step dataIn(size_t n);
 	scsi::Step dataOut(size_t n);
