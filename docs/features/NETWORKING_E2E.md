@@ -17,8 +17,8 @@ MacTCP setup).
 export MAXIVMAC_ROM=extras/roms/vMac.ROM            # Mac Plus ROM (not in the image)
 export E2E_DISK=$PWD/e2e-guest.hfs                  # from test/e2e/make-disk.sh
 export PEERTALK_DIR=~/peertalk CLOG_DIR=~/clog      # read-only inputs
-export BOMBERTALK_DIR=~/bombertalk                  # optional, R4
-test/e2e/run.sh r1 r2 r3                            # default; also r2b, r3b, r4
+export BOMBERTALK_DIR=~/bombertalk                  # optional, R4 and R5
+test/e2e/run.sh r1 r2 r3                            # default; also r2b, r3b, r4, r5
 ```
 
 ## What runs where (native vs container)
@@ -129,7 +129,7 @@ is routed.
 | `MAXIVMAC_ROM` | Mac Plus ROM (default `data/roms/MacPlus.ROM`, else `extras/roms/vMac.ROM`) |
 | `E2E_DISK` | the guest disk (below) |
 | `PEERTALK_DIR`, `CLOG_DIR` | PeerTalk and clog sources, **read-only** (nothing in them is modified) |
-| `BOMBERTALK_DIR` | optional, BomberTalk sources (R4) |
+| `BOMBERTALK_DIR` | optional, BomberTalk sources (R4, R5) |
 | `PEERTALK_DIR_OLD` | optional second PeerTalk (e.g. an older commit via `git archive`), built as `/opt/peers/old`; use with `E2E_PEER=old` |
 | `E2E_OUT`, `E2E_IMAGE`, `E2E_REPEAT`, `E2E_CPUS`, `E2E_MEMORY`, `E2E_PIDS`, `E2E_TIMEOUT`, `E2E_EXPECT_FAIL` | see the header of `run.sh` |
 | `E2E_PEER`, `E2E_SPEED` | `old` selects the pre-fix POSIX peer; `E2E_SPEED` is the emulator's `--speed` |
@@ -179,6 +179,41 @@ broadcast received over the hub), `peer.log`, `emulator.out`, `run.dbg`,
 | R3 | 10.88.0.20/**8** | 10.0.2.25/**8** | the cross-endianness case (below): same checks, one connection, dialed by 10.0.2.25 |
 | R3b | 10.88.0.20/8 | 10.0.2.15/8 | the pair as first specified (below): ranks agree under both readings |
 | R4 | 10.88.0.20/24, BomberTalk 68k | 10.88.0.10/24, BomberTalk SDL build | each side logs `Lobby entered`, `Peer discovered: .. (<other ip>)` and `Connected to:`, one TCP connection |
+| R5 | as R4 | as R4 | R4, then a game (below): `TX game start` on the guest, `Game start received` on the POSIX side, both `LOBBY -> GAME` and `Game started: 2 players`, each side's bomb arrives at the other, the POSIX build logs the guest's moves, the guest's screenshots show both sprites on the move, nobody dies, still one TCP connection |
+
+### R5: a game, not only a lobby
+
+The guest is the one that starts: its script waits for `Press Return to Start`
+(drawn once the lobby lists a peer; `wait text` sees BomberTalk's DrawString) and
+holds Return, so the guest sends `MSG_GAME_START` and both leave the lobby. Player
+ids are ranks by address: the POSIX build (10.88.0.10) is P0 at the top left, the
+guest P1 at the top right. Then, in this order:
+
+1. the guest (script: `key down/space/up/left hold ...`, queued as one burst) steps
+   down one tile, drops a bomb and walks out of the blast to the tile on its left;
+2. the driver (`drive_posix_peer`) waits until the POSIX build logs `RX bomb placed
+   P1` and then plays the mirror image through a **command file**: the existing
+   `sdlkeys.so` LD_PRELOAD shim re-reads `SDLKEYS_CMDFILE` every 40 ms and reports
+   the SDL scancodes listed in it as held (79 right, 81 down, 82 up, 44 space). So
+   the POSIX peer is scripted and **BomberTalk itself is unchanged** (no headless
+   hook was needed; the shim sits behind `SDL_GetKeyboardState`, the only call the
+   SDL build uses for input).
+
+Why the checks look the way they do: the 68k build logs at INFO (`isMacSE`), so the
+guest never logs positions, while the POSIX build logs every received position at
+DEBUG. The evidence is therefore asymmetric. POSIX side: `P1 target pos` shows
+several distinct positions of the guest. Guest side: `RX bomb placed P0 (1,2)` (the
+peer's spawn is (1,1), so it had moved) and the guest's own screenshots, where the
+driver locates each sprite (`png_gray`, stdlib) and requires the POSIX player to be
+one tile right of its corner and the guest's sprite one tile left of its corner,
+against the screenshot at game start. The game must not end (`Game over` would also
+mean a reconnect, i.e. a second TCP connection), which is why each player's bomb is
+dropped in the one-tile pocket beside its corner and left behind.
+
+Script time is emulated CPU time: at the default speed 16 script seconds are one
+second of the guest's clock and a tile takes 0.2 s, hence the short holds (`key down
+hold 6s` is about one tile). The BomberTalk build pinned for the recorded runs is
+`4fa056b`; the disk's 68k BomberTalk is from 07:41 the same day (same protocol v6).
 
 `test_mesh` (PeerTalk `tests/test_mesh.c`) is the program: it dials a
 discovered peer only if `PT_ShouldInitiate` says so, broadcasts a heartbeat
@@ -283,4 +318,6 @@ the disk with hfsutils), screenshots.
   run under Colima (arm64 VM). `/dev/net/tun` and `NET_ADMIN` must be allowed
   there for the tap.
 - R4 asserts discovery and connection (logs, one TCP connection) and a human
-  looks at the Mac lobby screenshot; it does not start a game.
+  looks at the Mac lobby screenshot; it does not start a game: that is R5.
+- R5 plays a few seconds of one game (moves and one bomb each); it does not play
+  to a result, join in progress, or test more than two players.
