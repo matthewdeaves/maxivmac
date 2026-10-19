@@ -23,12 +23,11 @@ the stub is replaced by a real NCR5380 bus model:
 - selecting an ID with no target never raises BSY, so the driver's
   selection timeout fires (deterministically, at any emulation speed)
 
-No target implementations ship yet. The seam exists so that a SCSI disk or
-a network adapter (DaynaPORT) can be added as a self-contained class; see
-[SCSI_DESIGN.md](SCSI_DESIGN.md).
-
-There are no command-line options for SCSI yet: with no target type to
-choose, `--scsiN=...` would do nothing.
+One target type ships: the DaynaPORT SCSI/Link Ethernet adapter
+(`--scsiN=daynaport`, see [NETWORKING_DAYNAPORT.md](NETWORKING_DAYNAPORT.md)).
+`--scsiN=none` (N = 0-6) leaves the ID empty. The seam is designed so that
+a SCSI disk can be added as a self-contained class; see
+[SCSI_DESIGN.md](SCSI_DESIGN.md). `--diag=scsi` traces every CDB a target sees.
 
 ## Known limits
 
@@ -39,7 +38,9 @@ choose, `--scsiN=...` would do nothing.
   CB2, but no real driver has exercised that path, and /DACK pseudo-DMA
   (A9) is decoded for the compact Macs only.
 - Verified by unit tests (`test/test_ncr5380.cpp`) driving register
-  sequences, not yet against a real Mac SCSI driver talking to a target.
+  sequences, and end to end by the real Dayna driver on System 6.0.8
+  talking to the DaynaPORT target (selection, IDENTIFY, CDBs, data in and
+  out, status, bus resets); see NETWORKING_DAYNAPORT.md for the trace.
 
 ## Testing
 
