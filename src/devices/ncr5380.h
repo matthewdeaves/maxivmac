@@ -68,7 +68,7 @@ private:
 	void setPhase(Phase p, bool req);
 	void checkSelect();
 	void handleMessage(uint8_t m);
-	void startArbitration();
+	void maybeArbitrate();
 
 	scsi::ScsiTarget *targets_[7] = {};
 	bool real_ = false;

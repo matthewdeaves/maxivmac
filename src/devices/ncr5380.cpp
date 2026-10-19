@@ -222,10 +222,16 @@ void Ncr5380::setPhase(Phase p, bool req)
 {
 	phase_ = p;
 	req_ = req;
+	if (p == Phase::Free) maybeArbitrate();
 }
 
-void Ncr5380::startArbitration()
+/* Arbitration can only begin once the bus is free; the chip then drives
+   BSY and its ID (ODR) onto the bus and reports AIP.  There is only one
+   initiator on this bus, so nobody can beat us: LA is never set. */
+void Ncr5380::maybeArbitrate()
 {
+	if (!(mr_ & kMrArb) || aip_) return;
+	if (phase_ != Phase::Free || (icr_ & kIcrBsy)) return;
 	aip_ = true;
 	la_ = false;
 }
@@ -458,7 +464,7 @@ void Ncr5380::realWrite(uint8_t reg, uint8_t v, bool dack)
 	{
 		const uint8_t old = mr_;
 		mr_ = v;
-		if ((v & kMrArb) && !(old & kMrArb)) startArbitration();
+		if ((v & kMrArb) && !(old & kMrArb)) maybeArbitrate();
 		if (!(v & kMrArb)) aip_ = la_ = false;
 		if (!(v & kMrDma)) dmaActive_ = false;
 		checkSelect();
