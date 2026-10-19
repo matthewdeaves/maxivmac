@@ -256,6 +256,14 @@ cgroup `cpu_seconds` is about the wall time).
 | R3b | 3/3 PASS | 126 s | 30 MB | same, 10.0.2.15 |
 | R4 | 3/3 PASS | 205 s | 38 MB | both sides `Lobby entered`, `Peer discovered`, `Connected to:`; the Mac lobby screenshot lists `BomberTalk (10.88.0.10)` |
 
+**R5** (later run, Colima, `--cpus 2 --memory 1g`, BomberTalk `4fa056b`, the disk's
+68k BomberTalk of the same day): 3/3 PASS, about 130 s each. One TCP connection, the
+guest sends `TX game start: 2 players`, both log `LOBBY -> GAME` and `Game started:
+2 players` (local=1 guest, local=0 POSIX), bombs `(13,2)` guest to POSIX and `(1,2)`
+POSIX to guest, the POSIX build received four distinct positions of the guest,
+sprite x on the guest's screen 154 to 170 (POSIX player) and 346 to 330 (guest).
+R1 to R4 were re-run once with the same change: PASS.
+
 **The pre-fix control.** The same R3 with the POSIX peer built from PeerTalk
 `63e7201` (the commit before the byte-order fix; `git archive`, the user's
 checkout is untouched), `E2E_PEER=old E2E_EXPECT_FAIL=1`: **3/3 fail the way the bug
