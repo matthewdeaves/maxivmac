@@ -28,6 +28,15 @@ int main(int argc, char **argv)
 
 	if (lc.headless)
 	{
+		/* Without --model (or a .mac file / --verify) machine creation is left
+		   to the model selector, which a headless run does not have; carrying
+		   on dereferenced a null machine. */
+		if (lc.macFilePath.empty() && !lc.modelExplicit)
+		{
+			fprintf(stderr, "Error: --headless needs --model=MODEL (e.g. --model=MacPlus) or a .mac file\n");
+			ProgramCleanup();
+			return 2;
+		}
 		/* Headless: parse .mac file if provided, then boot directly */
 		if (!lc.macFilePath.empty())
 		{
