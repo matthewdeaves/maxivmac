@@ -34,6 +34,15 @@ ip tuntap add dev tap0 mode tap user 2010 group 2010
 ip link set tap0 address "$MAC"
 ip addr add "$IP" dev tap0
 ip link set tap0 up
+# Two host routes, because this namespace has no default route (--network none):
+#  - PeerTalk's POSIX backend finds its own address by connect()ing a UDP socket to
+#    8.8.8.8 (no packet is sent) and reading the local address; without a route it
+#    falls back to 127.0.0.1 and never announces itself on the LAN;
+#  - it broadcasts discovery to 255.255.255.255, which Linux refuses (ENETUNREACH)
+#    when no route matches, so nothing would leave tap0.
+# Nothing else is routed: tap0 is a port of the closed hub, there is no other network.
+ip route add 8.8.8.8/32 dev tap0
+ip route add 255.255.255.255/32 dev tap0
 sysctl -qw net.ipv6.conf.tap0.disable_ipv6=1 2>/dev/null || true
 echo "entrypoint: tap0 $IP mac $MAC; dropping to uid 2010"
 
