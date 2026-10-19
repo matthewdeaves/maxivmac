@@ -159,3 +159,18 @@ TEST_CASE("cli: --net-redir and its former name --slip-redir feed the same list"
 	CHECK(lc.netRedirs[0] == "tcp:8080:10.0.2.15:80");
 	CHECK(lc.netRedirs[1] == "udp:53:10.0.2.15:53");
 }
+
+TEST_CASE("config: --speed and --scale accept only in-range whole numbers")
+{
+	CHECK(parseArgs({"--speed=3"}).speed == 3);
+	CHECK(parseArgs({"--speed", "5"}).speed == 5);
+	CHECK(parseArgs({"--speed=9"}).speed == -1);
+	CHECK(parseArgs({"--speed=-1"}).speed == -1);
+	CHECK(parseArgs({"--speed=fast"}).speed == -1);
+	CHECK(parseArgs({"--speed", "2x"}).speed == -1);
+	CHECK(parseArgs({"--scale=4"}).scale == 4);
+	CHECK(parseArgs({"--scale", "8"}).scale == 8);
+	CHECK(parseArgs({"--scale=0"}).scale == 0);
+	CHECK(parseArgs({"--scale=999999999999"}).scale == 0);
+	CHECK(parseArgs({"--scale", "big"}).scale == 0);
+}

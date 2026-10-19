@@ -11,6 +11,7 @@
 #include "config/mac_file.h"
 #include <algorithm>
 #include <cassert>
+#include <cerrno>
 #include <cstdio>
 #include <string>
 #include <cstdlib>
@@ -94,6 +95,20 @@ static uint32_t parseRAMSize(const char *s)
 		return (uint32_t)(val * 1024 * 1024);
 	}
 	return (uint32_t)val;
+}
+
+// Parse a whole-string integer in [lo, hi]; on a bad value warn and return `fallback`.
+static int parseIntOption(const char *opt, const char *text, int lo, int hi, int fallback)
+{
+	char *end = nullptr;
+	errno = 0;
+	long v = strtol(text, &end, 10);
+	if (end == text || *end != '\0' || errno == ERANGE || v < lo || v > hi)
+	{
+		fprintf(stderr, "Warning: %s must be %d..%d (got '%s'); ignored\n", opt, lo, hi, text);
+		return fallback;
+	}
+	return static_cast<int>(v);
 }
 
 // Parse screen spec "WxHxD" (e.g. "640x480x8")
@@ -313,12 +328,12 @@ LaunchConfig ParseCommandLine(int argc, char *argv[])
 		}
 		if (strncmp(arg, "--speed=", 8) == 0)
 		{
-			lc.speed = atoi(arg + 8);
+			lc.speed = parseIntOption("--speed", arg + 8, 0, 5, -1);
 			continue;
 		}
 		if (strncmp(arg, "--scale=", 8) == 0)
 		{
-			lc.scale = atoi(arg + 8);
+			lc.scale = parseIntOption("--scale", arg + 8, 1, 16, 0);
 			continue;
 		}
 		if (strncmp(arg, "--log-start=", 12) == 0)
@@ -464,12 +479,14 @@ LaunchConfig ParseCommandLine(int argc, char *argv[])
 		}
 		if (strcmp(arg, "--speed") == 0 && i + 1 < argc)
 		{
-			lc.speed = atoi(argv[++i]);
+			lc.speed = parseIntOption("--speed", argv[i + 1], 0, 5, -1);
+			++i;
 			continue;
 		}
 		if (strcmp(arg, "--scale") == 0 && i + 1 < argc)
 		{
-			lc.scale = atoi(argv[++i]);
+			lc.scale = parseIntOption("--scale", argv[i + 1], 1, 16, 0);
+			++i;
 			continue;
 		}
 		if (strcmp(arg, "--title") == 0 && i + 1 < argc)
