@@ -19,6 +19,7 @@
 
 #include <arpa/inet.h>
 #include <errno.h>
+#include <netdb.h>
 #include <fcntl.h>
 #include <netinet/in.h>
 #include <poll.h>
@@ -57,6 +58,7 @@
 typedef struct {
     bool used;
     bool is_tap;
+    bool pinned; /* TAP / uplink: never ages out */
     struct sockaddr_in addr;
     time_t last_seen;
 } Client;
@@ -230,7 +232,7 @@ static void age(time_t now)
 {
     for (int i = 0; i < g_max_clients; i++) {
         Client *c = &g_clients[i];
-        if (c->used && !c->is_tap && now - c->last_seen >= g_client_timeout) {
+        if (c->used && !c->pinned && now - c->last_seen >= g_client_timeout) {
             if (g_verbose) {
                 char s[64];
                 fmt_client(c, s, sizeof s);
@@ -396,6 +398,51 @@ static void print_stats(FILE *o)
     fflush(o);
 }
 
+static int g_uplink = -1;
+
+/* Register another hub as a pinned client; we hello it periodically. */
+static int uplink_open(const char *spec)
+{
+    char host[256];
+    const char *colon = strrchr(spec, ':');
+    if (!colon || colon == spec || (size_t)(colon - spec) >= sizeof host) {
+        fprintf(stderr, "--connect wants host:port\n");
+        return -1;
+    }
+    memcpy(host, spec, (size_t)(colon - spec));
+    host[colon - spec] = '\0';
+    struct addrinfo hints, *res = NULL;
+    memset(&hints, 0, sizeof hints);
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_DGRAM;
+    int gr = getaddrinfo(host, colon + 1, &hints, &res);
+    if (gr != 0 || !res) {
+        fprintf(stderr, "--connect %s: %s\n", spec, gai_strerror(gr));
+        return -1;
+    }
+    for (int i = 0; i < g_max_clients; i++) {
+        if (!g_clients[i].used) {
+            g_clients[i].used = true;
+            g_clients[i].pinned = true;
+            g_clients[i].addr = *(struct sockaddr_in *)res->ai_addr;
+            g_clients[i].last_seen = now_s();
+            g_uplink = i;
+            freeaddrinfo(res);
+            return 0;
+        }
+    }
+    freeaddrinfo(res);
+    fprintf(stderr, "no free client slot for uplink\n");
+    return -1;
+}
+
+static void uplink_hello(void)
+{
+    if (g_uplink >= 0)
+        sendto(g_sock, "", 0, 0, (const struct sockaddr *)&g_clients[g_uplink].addr,
+               sizeof g_clients[g_uplink].addr);
+}
+
 static void on_sig(int s)
 {
     if (s == SIGUSR1)
@@ -412,6 +459,8 @@ static void usage(const char *p)
 #if ETHHUB_HAVE_TAP
             "  --tap NAME             attach Linux TAP device NAME as a port\n"
 #endif
+            "  --connect host:port    join another ethhub as a client (uplink; use a tree,\n"
+            "                         never a loop - there is no spanning tree)\n"
             "  --client-timeout SEC   drop idle clients after SEC (default %d)\n"
             "  --mac-timeout SEC      forget MACs after SEC (default %d)\n"
             "  --max-clients N        client table size (default %d, max %d)\n"
@@ -438,7 +487,8 @@ static int parse_int(const char *s, int lo, int hi, const char *what)
 
 int main(int argc, char **argv)
 {
-    const char *listen_spec = NULL, *tap_name = NULL, *pcap_path = NULL;
+    const char *listen_spec = NULL, *tap_name = NULL, *pcap_path = NULL,
+               *connect_spec = NULL;
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
         bool has = i + 1 < argc;
@@ -454,6 +504,8 @@ int main(int argc, char **argv)
             g_max_clients = parse_int(argv[++i], 1, HARD_MAX_CLIENTS, "max-clients");
         else if (!strcmp(a, "--max-macs") && has)
             g_max_macs = parse_int(argv[++i], 1, HARD_MAX_MACS, "max-macs");
+        else if (!strcmp(a, "--connect") && has)
+            connect_spec = argv[++i];
         else if (!strcmp(a, "--pcap") && has)
             pcap_path = argv[++i];
         else if (!strcmp(a, "--verbose"))
@@ -517,12 +569,15 @@ int main(int argc, char **argv)
         g_tap_slot = 0;
         g_clients[0].used = true;
         g_clients[0].is_tap = true;
+        g_clients[0].pinned = true;
         g_clients[0].last_seen = now_s();
 #else
         fprintf(stderr, "--tap is only supported on Linux\n");
         return 2;
 #endif
     }
+    if (connect_spec && uplink_open(connect_spec) < 0)
+        return 2;
     if (pcap_path)
         pcap_open(pcap_path);
 
@@ -547,7 +602,7 @@ int main(int argc, char **argv)
         pf[1].events = POLLIN;
         npf = 2;
     }
-    time_t last_age = now_s();
+    time_t last_age = now_s(), last_hello = last_age - 100;
     while (!g_quit) {
         int r = poll(pf, (nfds_t)npf, 500);
         if (r > 0) {
@@ -570,6 +625,10 @@ int main(int argc, char **argv)
         if (now != last_age) {
             age(now);
             last_age = now;
+        }
+        if (g_uplink >= 0 && now - last_hello >= 5) {
+            uplink_hello();
+            last_hello = now;
         }
         if (g_dump) {
             g_dump = 0;

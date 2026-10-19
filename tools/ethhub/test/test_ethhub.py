@@ -31,11 +31,11 @@ def frame(dst, src, payload=b"x" * 46, etype=b"\x08\x00"):
 
 
 class Hub:
-    def __init__(self, *args):
+    def __init__(self, *args, listen="127.0.0.1:0"):
         self.dir = tempfile.TemporaryDirectory()
         self.errpath = os.path.join(self.dir.name, "stderr")
         self.err = open(self.errpath, "w+")
-        self.p = subprocess.Popen([HUB, "--listen", "127.0.0.1:0", *args],
+        self.p = subprocess.Popen([HUB, "--listen", listen, *args],
                                   stdout=subprocess.PIPE, stderr=self.err, text=True)
         line = self.p.stdout.readline()
         m = re.match(r"ethhub listening on (\d+)", line)
@@ -345,6 +345,28 @@ class HubTest(unittest.TestCase):
         st = h.stats()
         self.assertLessEqual(st["clients"], 8)
         self.assertLessEqual(st["macs"], 16)
+
+    def test_uplink_joins_other_hub(self):
+        h1 = self.start()
+        a = h1.client()
+        h1.send(a, b"")
+        h2 = Hub("--connect", "127.0.0.1:%d" % h1.addr[1], "--client-timeout", "2")
+        self.addCleanup(lambda: self.assertEqual(h2.stop()[0], 0))
+        b = h2.client()
+        h2.send(b, b"")
+        time.sleep(1.0)  # uplink hello registers h2 at h1
+        f = frame(BCAST, mac(1))
+        h1.send(a, f)
+        self.assertEqual(recv(b), f)
+        g = frame(mac(1), mac(2))  # reply is learned through the uplink: unicast
+        h2.send(b, g)
+        self.assertEqual(recv(a), g)
+        # the pinned uplink survives longer than h2's client timeout
+        time.sleep(3.5)
+        h2.send(b, b"")
+        settle()
+        h1.send(a, f)
+        self.assertEqual(recv(b), f)
 
     def test_bad_args(self):
         for args in (["--listen", "x:99999"], ["--max-clients", "0"], ["--bogus"]):
