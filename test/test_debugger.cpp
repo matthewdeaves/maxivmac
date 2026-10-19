@@ -14,6 +14,9 @@
 #include "lang/global_registry.h"
 
 #include <cstring>
+#include <sys/stat.h>
+#include <unistd.h>
+#include "debugger/dbg_io.h"
 
 /* ════════════════════════════════════════════════════════
    Symbol table tests
@@ -961,4 +964,21 @@ TEST_CASE("data path resolves traps.def from an unrelated working directory")
 
 	/* a missing file comes back unchanged for the caller's own error path */
 	CHECK(ResolveDataPath("data/debug/no-such-file.def") == "data/debug/no-such-file.def");
+}
+
+TEST_CASE("debug server socket is owner-only and the umask is restored")
+{
+	const std::string path = "/tmp/maxivmac-test-" + std::to_string(getpid()) + ".sock";
+	const mode_t before = umask(0022);
+	umask(before);
+	int fd = CreateListenSocket(path);
+	REQUIRE(fd >= 0);
+	struct stat st{};
+	REQUIRE(stat(path.c_str(), &st) == 0);
+	CHECK((st.st_mode & 077) == 0); /* no group/other access */
+	const mode_t after = umask(0022);
+	umask(after);
+	CHECK(after == before);
+	close(fd);
+	unlink(path.c_str());
 }

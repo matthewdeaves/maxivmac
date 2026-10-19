@@ -105,7 +105,9 @@ TEST_CASE("SLIP decoder caps an unterminated frame and resynchronises")
 {
 	slip::Decoder dec;
 	/* 1 MiB with no END: the buffer must stay bounded and no packet may appear */
-	for (size_t i = 0; i < (1u << 20); ++i) CHECK_FALSE(dec.feed(0x45));
+	bool any = false;
+	for (size_t i = 0; i < (1u << 20); ++i) any |= dec.feed(0x45);
+	CHECK_FALSE(any);
 	/* the END that finally arrives drops the oversized frame ... */
 	CHECK_FALSE(dec.feed(slip::END));
 	/* ... and the next frame decodes normally */
