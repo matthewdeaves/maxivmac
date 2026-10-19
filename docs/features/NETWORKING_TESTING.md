@@ -133,8 +133,10 @@ final screenshot), `control-nolatency/`, `lat<N>ms/` (latency sweep).
 ## Scripting notes
 
 Found while writing the scripts (also in `docs/FINDINGS.md`): `source` inside a
-script loses the lines after the first `wait` in the scratch experiment, so the
-blocks are concatenated by `run-ping.sh` (not re-checked on this tree);
+script used to lose the lines after the first `wait` (fixed, FINDINGS S5), so
+`run-ping.sh` once concatenated the blocks; it now writes one `source "block"`
+line per block, which also puts the block's file and line in any failure
+message, and the last step is an `expect`;
 `drag` to a menu item lands one row off because the cursor lags, so menus are
 driven with `mousedown`, `move`, `mouseup` and waits; a Finder double-click
 needs the legacy `click x y`, `wait for 1s`, `click x y` form (`hold` makes

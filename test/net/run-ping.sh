@@ -32,11 +32,15 @@ trap 'rm -rf "$WORK"' EXIT
 export MAXIVMAC_OUT_DIR="${MAXIVMAC_OUT_DIR:-$CACHE/ping-out}"
 mkdir -p "$MAXIVMAC_OUT_DIR"
 
-# Assemble the script.  (`source` inside a script loses the lines after the
-# first wait, see docs/FINDINGS.md, so the blocks are concatenated.)
+# The script is a list of `source` lines, one per block, so a failure message
+# names the block's file and line (`source` runs the lines in place, waits
+# included; the quotes are needed because of the slashes).  `log` marks each
+# block in the output.
 BLOCKS="boot chooser cpopen ether move restart cpopen mactcp-open mactcp-config mactcp-close restart launch ping"
 : > "$WORK/ping.dbg"
-for b in $BLOCKS; do cat "$NETDIR/scripts/ping/$b.inc" >> "$WORK/ping.dbg"; done
+for b in $BLOCKS; do
+    printf 'log "block: %s"\nsource "%s/scripts/ping/%s.inc"\n' "$b" "$NETDIR" "$b" >> "$WORK/ping.dbg"
+done
 cp "$WORK/ping.dbg" "$MAXIVMAC_OUT_DIR/ping.dbg"
 
 cp "$NET_DISK" "$WORK/disk.hfs"
