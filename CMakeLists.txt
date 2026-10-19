@@ -446,8 +446,10 @@ add_executable(tests
     src/debugger/script_paths.cpp
     src/debugger/text_history.cpp
     src/debugger/script_tokens.cpp
+    src/debugger/script_keymap.cpp
     test/test_script_mouse.cpp
     test/test_script_text.cpp
+    test/test_script_keys.cpp
     test/test_script_paths.cpp
     test/test_slirp_timers.cpp
     src/storage/appledouble.cpp

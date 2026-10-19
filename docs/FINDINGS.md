@@ -43,7 +43,8 @@ the branch that found them.
 - A plain `wait text` still only sees text drawn after it was armed (by
   design, see S6); `wait text ... recent` reaches back.
 - Fixed `wait for` delays are fragile; synchronise on drawn text instead.
-- Key presses shorter than a tick can be missed by polling software.
+- `type` still uses very short key presses (80,000 units); text entry via
+  key events works, but a polling reader would miss them (S9).
 - Not run: `launch`, `exittoshell` and `shutdown` (need the SharedDrive
   INIT); `wait screen` and `test/scripts/screen_match.dbg` (need
   `test/fixtures/desktop.png`, which is absent); models other than the Plus.
@@ -117,6 +118,25 @@ the branch that found them.
   `on clear`. Not tried against a real guest alert; the guest tests use the
   Finder's menu text. Tests: `if_text.dbg`, `on_handler.dbg`, `on_fail.dbg`,
   `on_bad_wait.dbg`; token helpers in `test/test_script_text.cpp`.
+
+### S9. Key presses were too short for software that polls the keyboard
+
+- **Symptom:** `key` held a key for 80,000 units (0.16 ms emulated); the
+  Mac's KeyMap (the polled keyboard state) is only looked at once per tick
+  (16.6 ms), so a program using `GetKeys`/KeyMap never saw the press. Event
+  based input (the Finder's rename field) was fine, which is why the tests
+  passed. There was also no way to hold a key (a modifier at boot, a held
+  arrow) or to press a modifier alone.
+- **Status:** fixed. `key` now holds one tick by default, `key <spec> hold
+  <duration>` holds as long as asked, and `shift`, `cmd`, `opt`, `ctrl` are
+  accepted as keys by themselves. Measured on the Finder: with `key a` the
+  KeyMap bit is set 12 ms after queueing; with `key a hold 1s` it is set
+  after 0.5 s and clear after the release (`key_hold.dbg`,
+  `key_plain_poll.dbg`). `type` is unchanged (typing text works through key
+  events) and keeps its short presses. The timing plan is unit-tested
+  (`test/test_script_keys.cpp`). The longer default press delays each `key`
+  by about one tick (16.6 ms); the other scripts and the golden runs are
+  unaffected (the goldens do not script keys).
 
 ## 2026-10: found during feat/scsi-bus
 

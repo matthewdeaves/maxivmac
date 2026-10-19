@@ -1,0 +1,15 @@
+# `key <name> hold <duration>` keeps the key down; a program that polls the
+# keyboard (the Finder's KeyMap, low-memory $174) sees it while it is held.
+# `key a`: key code 0, bit 0 of the first KeyMap byte.
+set default-timeout 120s
+wait text "Special"
+wait for 1s
+log "KeyMap before"
+x/8xb 0x174
+key a hold 1s
+wait for 500ms
+log "KeyMap while a is held"
+x/8xb 0x174
+wait for 1500ms
+log "KeyMap after release"
+x/8xb 0x174

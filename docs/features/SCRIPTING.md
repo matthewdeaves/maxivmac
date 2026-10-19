@@ -374,10 +374,16 @@ pair.  Does not resume the guest — just enqueues input.
 key return
 key cmd-K
 key cmd-shift-S
+key a hold 1s                    # keep it down for a second
+key shift hold 3s                # a modifier on its own (e.g. shift at boot)
 ```
 
 Inject a single key press, optionally with modifiers.  Does not resume
 the guest — just enqueues a key-down/key-up pair into the input queue.
+`hold <duration>` (same units as everywhere, see [Time units](#time-units))
+sets how long the key stays down; without it the key is down for one 60 Hz
+tick.  A key held longer than the guest's repeat threshold (about a quarter
+of a second) auto-repeats in a text field, as on a real keyboard.
 
 **Modifiers:** `cmd`, `shift`, `opt`, `ctrl` — combined with `-`.
 
@@ -386,16 +392,25 @@ the guest — just enqueues a key-down/key-up pair into the input queue.
 
 #### Key timing
 
-Events are queued in scheduler units (see [Time units](#time-units)):
-a key is held for 80,000 units (~0.16 ms emulated) and the next key
-follows 160,000 units after the previous one's press; `key` presses
-modifiers 10,000 units before the key and releases them 100,000 units
-after the press.  Guest software sees every transition as its own keyboard
-event, which is what typing needs (verified with `type` into a Finder
-rename field), but a program that *polls* the keyboard state instead of
-using events can miss such short presses.  If the queue is empty the first
-event is immediate; subsequent events are scheduled after the last queued
-key event.
+Events are queued in scheduler units (see [Time units](#time-units)).
+`key` presses modifiers 10,000 units before the key, holds the key for
+`hold` (default one tick, 130,240 cycles = 8.3M units on a Plus, ~16.6 ms)
+and releases the modifiers 10,000 units after the key; the next key follows
+160,000 units after the previous event.  `type` still uses short presses:
+each character is down for 80,000 units (~0.16 ms emulated) and the next
+follows 160,000 units after the previous one's press.  Guest software sees
+every transition as its own keyboard event, which is what typing needs
+(verified with `type` into a Finder rename field), but a program that
+*polls* the keyboard state (`GetKeys`, the `KeyMap` low-memory global at
+`$174`) instead of using events can miss a press shorter than a tick, so use
+`key` (or `key ... hold`) for anything that polls.  (A plain `key` used to
+be down for only 80,000 units.)  If
+the queue is empty the first event is immediate; subsequent events are
+scheduled after the last queued key event.
+
+To see what the guest sees, read the key map while the key is held:
+`key a hold 1s`, `wait for 500ms`, `x/8xb 0x174` (key code 0 is bit 0 of the
+first byte; the tests do exactly this).
 
 `type` and `key` both push to the same queue — you can interleave
 them freely, and the timing is cumulative.

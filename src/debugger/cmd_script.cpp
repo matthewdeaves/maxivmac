@@ -435,21 +435,33 @@ void CmdType(Debugger &dbg, const std::vector<Token> &args)
 	dbg.io().write("type \"%s\"\n", args[0].text.c_str());
 }
 
+static ScaledCycleCount ScriptUnitsPerTick();
+static bool ParseHold(Debugger &dbg, const std::vector<Token> &args, size_t idx, bool &given,
+					  ScaledCycleCount &hold);
+
 void CmdKey(Debugger &dbg, const std::vector<Token> &args)
 {
 	if (args.empty() || args[0].isEnd())
 	{
-		ScriptError(dbg, "Usage: key <keyspec>  (e.g. cmd-S, return, cmd-shift-N)");
+		ScriptError(dbg, "Usage: key <keyspec> [hold <duration>]  (e.g. cmd-S, return, cmd-shift-N)");
 		return;
 	}
 
-	// Reconstruct keyspec from tokens (tokenizer splits on '-')
+	// Reconstruct keyspec from tokens (tokenizer splits on '-'), up to `hold`
 	std::string spec;
-	for (const auto &tok : args)
+	size_t i = 0;
+	for (; i < args.size(); ++i)
 	{
-		if (tok.isEnd()) break;
-		spec += tok.text;
+		if (args[i].isEnd() || (args[i].isWord("hold") && !args[i].quoted)) break;
+		spec += args[i].text;
 	}
+
+	/* Without `hold` the key stays down for one 60 Hz tick: software that
+	   polls the keyboard (GetKeys, KeyMap) looks once per tick and would miss
+	   anything shorter. */
+	bool holdGiven = false;
+	ScaledCycleCount hold = std::max<ScaledCycleCount>(kKeyDefaultHold, ScriptUnitsPerTick());
+	if (!ParseHold(dbg, args, i, holdGiven, hold)) return;
 
 	KeySpec ks = ParseKeySpec(spec);
 	if (ks.keycode == 0xFF)
@@ -459,29 +471,14 @@ void CmdKey(Debugger &dbg, const std::vector<Token> &args)
 	}
 
 	ScaledCycleCount t = EventQ_LatestKeyTime() + 160000;
+	for (const auto &e : PlanKeyPress(ks.modifiers, ks.keycode, hold))
+		EventQ_Push({t + e.dt, EvtQElKind::Key, {.press = {e.key, e.down}}});
 
-	// Press modifiers
-	if (ks.modifiers & kModCmd) EventQ_Push({t, EvtQElKind::Key, {.press = {MKC_Command, true}}});
-	if (ks.modifiers & kModShift) EventQ_Push({t, EvtQElKind::Key, {.press = {MKC_Shift, true}}});
-	if (ks.modifiers & kModOption) EventQ_Push({t, EvtQElKind::Key, {.press = {MKC_Option, true}}});
-	if (ks.modifiers & kModCtrl) EventQ_Push({t, EvtQElKind::Key, {.press = {MKC_Control, true}}});
-
-	// Key down/up
-	EventQ_Push({t + 10000, EvtQElKind::Key, {.press = {ks.keycode, true}}});
-	EventQ_Push({t + 90000, EvtQElKind::Key, {.press = {ks.keycode, false}}});
-
-	// Release modifiers
-	ScaledCycleCount release = t + 100000;
-	if (ks.modifiers & kModCtrl)
-		EventQ_Push({release, EvtQElKind::Key, {.press = {MKC_Control, false}}});
-	if (ks.modifiers & kModOption)
-		EventQ_Push({release, EvtQElKind::Key, {.press = {MKC_Option, false}}});
-	if (ks.modifiers & kModShift)
-		EventQ_Push({release, EvtQElKind::Key, {.press = {MKC_Shift, false}}});
-	if (ks.modifiers & kModCmd)
-		EventQ_Push({release, EvtQElKind::Key, {.press = {MKC_Command, false}}});
-
-	dbg.io().write("Key: %s\n", spec.c_str());
+	if (holdGiven)
+		dbg.io().write("Key: %s hold %.3f s\n", spec.c_str(),
+					   static_cast<double>(hold) / static_cast<double>(ScriptUnitsPerSecond()));
+	else
+		dbg.io().write("Key: %s\n", spec.c_str());
 }
 
 void CmdClearKeys(Debugger &dbg, const std::vector<Token> &)

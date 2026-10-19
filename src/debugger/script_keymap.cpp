@@ -133,6 +133,13 @@ struct NamedKey
 };
 
 static constexpr NamedKey kNamedKeys[] = {
+	{"shift", MKC_Shift},
+	{"cmd", MKC_Command},
+	{"command", MKC_Command},
+	{"opt", MKC_Option},
+	{"option", MKC_Option},
+	{"ctrl", MKC_Control},
+	{"control", MKC_Control},
 	{"return", MKC_Return},
 	{"enter", MKC_Enter},
 	{"tab", MKC_Tab},
@@ -222,4 +229,27 @@ KeySpec ParseKeySpec(std::string_view spec)
 
 	result.keycode = LookupKeyName(parts.back());
 	return result;
+}
+
+std::vector<KeyEdge> PlanKeyPress(uint8_t modifiers, uint8_t keycode, uint64_t hold)
+{
+	struct Mod
+	{
+		uint8_t bit;
+		uint8_t key;
+	};
+	// Press in this order, release in the reverse order.
+	static constexpr Mod kMods[] = {
+		{kModCmd, MKC_Command}, {kModShift, MKC_Shift}, {kModOption, MKC_Option}, {kModCtrl, MKC_Control}};
+
+	std::vector<KeyEdge> plan;
+	for (auto m : kMods)
+		if (modifiers & m.bit) plan.push_back({0, m.key, true});
+	const uint64_t down = kKeyModLead;
+	const uint64_t up = down + hold;
+	plan.push_back({down, keycode, true});
+	plan.push_back({up, keycode, false});
+	for (size_t i = sizeof kMods / sizeof kMods[0]; i-- > 0;)
+		if (modifiers & kMods[i].bit) plan.push_back({up + kKeyModTail, kMods[i].key, false});
+	return plan;
 }

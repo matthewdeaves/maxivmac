@@ -156,6 +156,22 @@ expect "on text once fires"                         on_handler.dbg      0 "handl
 expect "a failing handler names its on line"        on_fail.dbg         1 "on_fail.dbg:3" disk
 expect "a handler that would wait is rejected"      on_bad_wait.dbg     2 "cannot run from a handler"
 
+# Key timing: a polling program (the KeyMap low-memory global) must see the key.
+keymap_after() { echo "$OUT" | grep -A1 "$1" | tail -1; }
+if [ -f "$DISK" ]; then
+    run key_hold.dbg disk
+    held="$(keymap_after 'KeyMap while a is held')"; released="$(keymap_after 'KeyMap after release')"
+    case "$held" in *'174: 0100 '*) ok=1 ;; *) ok=0 ;; esac
+    case "$released" in *'174: 0000 0000 0000 0000'*) ok=$ok ;; *) ok=0 ;; esac
+    if [ "$RC" -eq 0 ] && [ "$ok" -eq 1 ]; then pass "key hold: KeyMap shows the key while held"; else fail "key hold: KeyMap shows the key while held" "held: $held; released: $released"; fi
+    run key_plain_poll.dbg disk
+    during="$(keymap_after 'KeyMap during a plain key press')"
+    case "$during" in *'174: 0100 '*) pass "plain key lasts long enough to be polled" ;; *) fail "plain key lasts long enough to be polled" "$during" ;; esac
+else
+    skip "key hold: KeyMap shows the key while held" "disk $DISK not found"
+    skip "plain key lasts long enough to be polled" "disk $DISK not found"
+fi
+
 # `source` inside a script: a wait in the sourced file must not drop the lines
 # after it, nor the lines after the `source` itself.
 if [ -f "$DISK" ]; then

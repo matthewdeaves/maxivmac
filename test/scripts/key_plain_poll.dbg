@@ -1,0 +1,13 @@
+# A plain `key` stays down for one 60 Hz tick, long enough for a program that
+# polls the keyboard state (KeyMap, $174) to see it.  Sampled 6M units
+# (~12 ms emulated) after queueing: the key is still down.
+set default-timeout 120s
+wait text "Special"
+wait for 1s
+key a
+wait for 6M
+log "KeyMap during a plain key press"
+x/8xb 0x174
+wait for 1s
+log "KeyMap afterwards"
+x/8xb 0x174
