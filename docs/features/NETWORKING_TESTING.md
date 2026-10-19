@@ -121,8 +121,13 @@ final screenshot), `control-nolatency/`, `lat<N>ms/` (latency sweep).
 
 ## Not covered
 
-- **TCP**: there is no TCP client on the disk (Net Tools only has MacTCP Ping),
-  so TCP through slirp and host forwards are not exercised by this test.
+- **TCP**: there is no TCP client on this test's disk (Net Tools only has MacTCP
+  Ping), so TCP through slirp and host forwards are not exercised by this test.
+  TCP between the guest and a POSIX peer over an ethhub LAN is covered by the
+  containerised end-to-end test, [NETWORKING_E2E.md](NETWORKING_E2E.md), which
+  reuses this disk preparation and adds PeerTalk's 68k test apps
+  (`test/net/add-apps.sh`) and a configurable MacTCP address
+  (`test/net/mactcp-config.py`).
 - DNS name resolution (the DNS server is configured and reachable, a name was
   never resolved), ICMP to hosts beyond slirp's gateway/DNS addresses.
 - Real-time (`--speed=0`) behaviour; the run uses the maximum headless speed,

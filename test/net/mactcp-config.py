@@ -6,9 +6,10 @@
 usage: mactcp-config.py IP/PREFIX [--gateway GW] [--dns DNS --domain DOMAIN]
 
 Same gestures as scripts/ping/mactcp-config.inc (which is the slirp 10.0.2.15/24
-case), parameterised: the four address fields, the subnet slider (only /24 is
-supported besides the class default; a class A address such as 10.x.y.z keeps
-/8 when the slider is left alone), and an optional gateway and DNS.  Without a
+case; the output is identical for it), parameterised: the Net / Subnet / Node
+boxes of the class A dialog (as numbers: with /24 the subnet box holds octets 2
+and 3 as one 16-bit number), the subnet slider (/8, the class A default, or
+/24), and an optional gateway and DNS.  Without a
 gateway the field is left empty (a LAN with no router).  Run it after the
 "mactcp-open" block and before "mactcp-close".  Coordinates are for the 512x342
 Plus screen with the MacTCP "More..." dialog open (see mactcp-open.inc).
