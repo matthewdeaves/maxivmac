@@ -100,6 +100,7 @@ set(MINIVMAC_SOURCES
     src/debugger/symbols.cpp
     src/debugger/expr.cpp
     src/debugger/bp_text.cpp
+    src/debugger/text_history.cpp
     src/debugger/bp_power.cpp
     src/debugger/bp_screen.cpp
     src/debugger/cmd_script.cpp
@@ -441,7 +442,9 @@ add_executable(tests
     src/debugger/duration.cpp
     src/debugger/script_mouse.cpp
     src/debugger/script_paths.cpp
+    src/debugger/text_history.cpp
     test/test_script_mouse.cpp
+    test/test_script_text.cpp
     test/test_script_paths.cpp
     test/test_slirp_timers.cpp
     src/storage/appledouble.cpp

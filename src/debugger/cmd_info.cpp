@@ -8,6 +8,7 @@
 #include "debugger/symbols.h"
 #include "debugger/settings.h"
 #include "debugger/cmd_script.h"
+#include "debugger/text_history.h"
 
 #include "core/extn_clip.h"
 #include "core/machine.h"
@@ -519,11 +520,24 @@ static void InfoKeys(Debugger &dbg)
 					   e.u.press.down ? "down" : "up");
 }
 
+static void InfoText(Debugger &dbg, const std::vector<Token> &args)
+{
+	size_t n = 20;
+	if (args.size() > 1 && args[1].isNumber()) n = static_cast<size_t>(args[1].numValue);
+	auto &hist = ScriptTextHistory();
+	auto recs = hist.last(n);
+	dbg.io().write("Recent text: %zu of %zu kept (newest last)\n", recs.size(), hist.size());
+	const double hz = static_cast<double>(ScriptUnitsPerSecond());
+	for (auto *r : recs)
+		dbg.io().write("  [%9.3fs] %s \"%s\"\n", static_cast<double>(r->time) / hz,
+					   r->trap.c_str(), r->text.c_str());
+}
+
 void CmdInfo(Debugger &dbg, const std::vector<Token> &args)
 {
 	if (args.empty() || args[0].isEnd())
 	{
-		dbg.io().write("Usage: info <break|reg|trace|traps|globals|types|symbol|insn|script|keys>\n");
+		dbg.io().write("Usage: info <break|reg|trace|traps|globals|types|symbol|insn|script|keys|text>\n");
 		return;
 	}
 
@@ -554,10 +568,12 @@ void CmdInfo(Debugger &dbg, const std::vector<Token> &args)
 		InfoScript(dbg);
 	else if (sub == "keys")
 		InfoKeys(dbg);
+	else if (sub == "text")
+		InfoText(dbg, args);
 	else
 		dbg.io().write("Unknown info sub-command '%s'.\n"
 					   "  Available: break, reg, trace, traps, globals, types, symbol, insn, via, "
-					   "scrap, console, script, keys\n",
+					   "scrap, console, script, keys, text\n",
 					   sub.c_str());
 }
 

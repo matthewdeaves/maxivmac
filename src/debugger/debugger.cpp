@@ -65,6 +65,7 @@ void CmdScreenshot(Debugger &dbg, const std::vector<Token> &args);
 void CmdWait(Debugger &dbg, const std::vector<Token> &args);
 void CmdFail(Debugger &dbg, const std::vector<Token> &args);
 void CmdTimeout(Debugger &dbg, const std::vector<Token> &args);
+void CmdClear(Debugger &dbg, const std::vector<Token> &args);
 void CmdDrag(Debugger &dbg, const std::vector<Token> &args);
 void CmdMove(Debugger &dbg, const std::vector<Token> &args);
 void CmdMouseDown(Debugger &dbg, const std::vector<Token> &args);
@@ -208,7 +209,8 @@ static CmdEntry s_commands[] = {
 	 "screenshot <filename>\n  Save the current framebuffer to a PNG file.\n",
 	 "Guest"},
 	{"wait", "", CmdWait, "Wait for condition",
-	 "wait text \"pattern\" [timeout]\n  Resume until text appears (script suspends).\n"
+	 "wait text \"pattern\" [timeout] [recent [window]]\n  Resume until text appears (script suspends).\n"
+	 "  'recent' also accepts text drawn within the last <window> (default 5s) of emulated time.\n"
 	 "wait screen \"ref.png\" [timeout] [pct]\n  Resume until screen matches reference.\n"
 	 "wait for <duration>\n  Resume for a fixed amount of emulated time (5s, 500ms, raw units).\n"
 	 "wait off [timeout]\n  Resume until guest power-off.\n"
@@ -216,6 +218,10 @@ static CmdEntry s_commands[] = {
 	 "wait trap <name> [timeout]\n  Resume until trap fires.\n"
 	 "  Timeout accepts: 5s, 500ms (emulated time), 1M, 100k, raw scheduler units, off.\n"
 	 "  Default: 'set default-timeout' (60s). A timeout exits the emulator with status 1.\n",
+	 "Scripting"},
+	{"clear", "", CmdClear, "Forget recently drawn text",
+	 "clear text\n  Empty the buffer of recently drawn text, so 'wait text ... recent' only sees\n"
+	 "  text drawn from now on.\n",
 	 "Scripting"},
 	{"timeout", "", CmdTimeout, "Set default wait timeout",
 	 "timeout <duration>\n  Same as 'set default-timeout'. Accepts 5s, 500ms, 1M, 100k, off, or raw\n"

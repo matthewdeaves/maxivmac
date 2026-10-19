@@ -138,6 +138,10 @@ if [ -f "$DISK" ]; then
 else
     skip "--disk-snapshot leaves the image unchanged" "disk $DISK not found"
 fi
+expect "wait text recent sees text drawn before it" text_recent.dbg 0 "Text already drawn" disk
+expect "plain wait text does not see older text"    text_not_recent.dbg 1 "TIMEOUT" disk
+expect "clear text empties the recent buffer"       text_cleared.dbg    1 "TIMEOUT" disk
+expect "recent honours its window"                  text_too_old.dbg    1 "TIMEOUT" disk
 
 # `source` inside a script: a wait in the sourced file must not drop the lines
 # after it, nor the lines after the `source` itself.

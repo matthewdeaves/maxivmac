@@ -1,0 +1,7 @@
+# `wait text ... recent` sees text drawn before the command ran.  The Finder
+# menu bar is drawn once, at boot, just before "Special" is matched.
+set default-timeout 120s
+wait text "Special"
+wait for 200ms
+wait text "File" 1s recent
+wait text "Special" recent 10s

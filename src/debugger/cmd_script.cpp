@@ -9,6 +9,7 @@
 #include "debugger/duration.h"
 #include "debugger/script_mouse.h"
 #include "debugger/script_paths.h"
+#include "debugger/text_history.h"
 
 #include "core/machine.h"
 #include "core/ict_scheduler.h"
@@ -36,6 +37,15 @@ ScaledCycleCount ScriptDefaultTimeout()
 	uint64_t v = kDefaultScriptTimeoutUnits;
 	SettingGetUInt64("default-timeout", v);
 	return v;
+}
+
+/* How far back `wait text ... recent` looks when no window is given. */
+static constexpr uint64_t kDefaultRecentSeconds = 5;
+
+/* Emulated time as seconds, for messages. */
+static double EmuSeconds(uint64_t units)
+{
+	return static_cast<double>(units) / static_cast<double>(ScriptUnitsPerSecond());
 }
 
 /* Report a bad script command.  In unattended script mode (--dbg-script
@@ -85,6 +95,7 @@ void CmdWait(Debugger &dbg, const std::vector<Token> &args)
 	{
 		budget = ScriptDefaultTimeout();
 		if (idx >= args.size() || args[idx].isEnd()) return true;
+		if (args[idx].isWord("recent")) return true; // no timeout given
 		uint64_t v;
 		size_t used;
 		if (!ParseDurationTokens(args, idx, hz, v, used))
@@ -122,6 +133,26 @@ void CmdWait(Debugger &dbg, const std::vector<Token> &args)
 		idx = 2;
 		if (!parseBudget(idx, budget)) return;
 		setDeadline(bp, budget);
+		// Optional `recent [<window>]`: text drawn shortly before counts too
+		if (idx < args.size() && args[idx].isWord("recent"))
+		{
+			uint64_t window = kDefaultRecentSeconds * hz;
+			size_t used;
+			if (idx + 1 < args.size() && !args[idx + 1].isEnd() &&
+				!ParseDurationTokens(args, idx + 1, hz, window, used))
+			{
+				ScriptError(dbg, "Error: cannot parse the window after 'recent' (use 5s, 500ms)");
+				return;
+			}
+			ScaledCycleCount now = g_ict.getCurrent();
+			uint64_t since = (window == 0 || window > now) ? 0 : now - window;
+			if (auto *rec = ScriptTextHistory().find(bp.textPattern, since))
+			{
+				dbg.io().write("Text already drawn %.3f s ago (%s): \"%s\"\n",
+							   EmuSeconds(now - rec->time), rec->trap.c_str(), rec->text.c_str());
+				return;
+			}
+		}
 	}
 	else if (args[0].isWord("screen"))
 	{
@@ -229,6 +260,17 @@ void CmdWait(Debugger &dbg, const std::vector<Token> &args)
 		dbg.io().write("Waiting (bp %u, timeout %.3f s emulated = %" PRIu64 " units)...\n", id,
 					   static_cast<double>(budget) / static_cast<double>(hz), budget);
 	dbg.setRunning();
+}
+
+void CmdClear(Debugger &dbg, const std::vector<Token> &args)
+{
+	if (args.empty() || !args[0].isWord("text"))
+	{
+		ScriptError(dbg, "Usage: clear text   (forget the text drawn so far; see wait text ... recent)");
+		return;
+	}
+	ScriptTextHistory().clear();
+	dbg.io().write("Cleared the recent-text buffer\n");
 }
 
 void CmdTimeout(Debugger &dbg, const std::vector<Token> &args)

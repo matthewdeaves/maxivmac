@@ -6,7 +6,15 @@
 #include "debugger/bp_text.h"
 #include "debugger/debugger.h"
 #include "debugger/dbg_io.h"
+#include "debugger/text_history.h"
 #include "core/machine.h"
+#include "core/ict_scheduler.h"
+
+TextHistory &ScriptTextHistory()
+{
+	static TextHistory history;
+	return history;
+}
 
 static bool s_showText = false;
 
@@ -23,6 +31,9 @@ void ScriptCaptureText(std::string_view utf8Text, std::string_view trapName)
 {
 	auto *dbg = Debugger::instance();
 	if (!dbg) return;
+
+	// Remember it, so `wait text ... recent` and failure messages can see it
+	ScriptTextHistory().push(g_ict.getCurrent(), utf8Text, trapName);
 
 	// Show captured text if enabled
 	if (s_showText)

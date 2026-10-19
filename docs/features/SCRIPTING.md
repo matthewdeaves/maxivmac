@@ -104,12 +104,13 @@ captured and discover patterns.
 
 Consequences worth knowing:
 
-- Only text drawn **after** the `wait text` is armed can match.  The Finder
-  menu bar is drawn once at boot; `wait text "File"` issued after the
+- A plain `wait text` only matches text drawn **after** it is armed.  The
+  Finder menu bar is drawn once at boot; `wait text "File"` issued after the
   desktop is up will not see it, but `wait text "Special"` issued before
-  boot completes will.  To check for something already on screen use
-  `wait screen`, or pull the menu down again (`mousedown`) so it is
-  redrawn.
+  boot completes will.  To also match text drawn shortly *before* the
+  command ran, add `recent` (see [Recent text](#recent-text)); to check
+  for something already on screen use `wait screen`, or pull the menu down
+  again (`mousedown`) so it is redrawn.
 - The match fires while the guest is still drawing.  The framebuffer shown
   by `screenshot` is updated at the end of each 60 Hz tick, so add a short
   `wait for 100ms` before a screenshot that should contain the text.
@@ -199,6 +200,8 @@ breakpoint target:
 |---|---|
 | `wait text "pattern"` | Text match |
 | `wait text "pattern" 20s` | Text match with explicit timeout |
+| `wait text "pattern" recent` | Text drawn in the last 5 s (emulated), or from now on |
+| `wait text "pattern" 20s recent 2s` | ... with a timeout and a 2 s look-back window |
 | `wait screen "ref.png"` | Screen match |
 | `wait screen "ref.png" 20s 95` | Screen match with timeout + threshold (percent) |
 | `wait for 2s` | Run for a fixed amount of emulated time (never fails) |
@@ -222,6 +225,30 @@ wins.  The timeout defaults to the value set by `timeout` /
 **Interactive use:** If you type `wait` at the prompt with no pending
 script, it behaves like `tbreak <condition>` + `continue` — stops
 when the condition fires and shows the prompt.
+
+### Recent text
+
+The emulator keeps the last 256 strings the guest drew, each with the
+emulated time it was drawn.  `wait text "x" recent [<window>]` checks that
+history first: if a string containing `x` was drawn within the last
+`<window>` (default 5 s of emulated time) the command is satisfied at once
+and the script carries on (it prints `Text already drawn 0.214 s ago ...`);
+otherwise it waits as usual.  Without `recent` nothing changes: only text
+drawn after the command counts, so a script cannot be satisfied by a stale
+string from an earlier step.
+
+```
+wait text "Special"
+wait for 200ms
+wait text "File" 1s recent     # the menu bar was drawn before the wait
+clear text                     # forget everything drawn so far
+wait text "File" 1s recent     # ... so this now times out
+```
+
+`clear text` empties the buffer: use it right before the action whose
+reaction you want to match, so `recent` only sees text drawn from then on.
+`info text [n]` lists the last `n` (default 20) strings with their emulated
+times.  The buffer is the same one the failure messages print.
 
 ## Other new commands
 

@@ -1,0 +1,6 @@
+# Without `recent` only text drawn after the wait is armed counts (the
+# documented default): the menu bar is already on screen, so this times out.
+set default-timeout 120s
+wait text "Special"
+wait for 200ms
+wait text "File" 1s

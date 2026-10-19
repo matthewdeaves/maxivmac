@@ -1,0 +1,6 @@
+# `clear text` forgets what was drawn: `recent` then sees nothing.
+set default-timeout 120s
+wait text "Special"
+wait for 200ms
+clear text
+wait text "File" 1s recent

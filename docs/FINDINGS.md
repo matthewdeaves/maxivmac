@@ -39,8 +39,8 @@ the branch that found them.
 
 - `commands ... end` blocks read the console, not the script (exit 2 in
   unattended mode).
-- `wait text` only sees text drawn after it was armed; the menu bar, drawn
-  once at boot, is missed if armed late.
+- A plain `wait text` still only sees text drawn after it was armed (by
+  design, see S6); `wait text ... recent` reaches back.
 - Fixed `wait for` delays are fragile; synchronise on drawn text instead.
 - Key presses shorter than a tick can be missed by polling software.
 - Not run: `launch`, `exittoshell` and `shutdown` (need the SharedDrive
@@ -66,6 +66,21 @@ the branch that found them.
   wait" and "several --dbg-script files run in order" in
   `test/run_script_tests.sh`. Unquoted absolute paths (`source /a/b.dbg`)
   still fail: the tokenizer reads `/` as an operator, so quote the path.
+
+### S6. `wait text` was blind to text drawn before it was armed
+
+- **Symptom:** text drawn between two script lines (while the script was
+  not waiting, e.g. an alert that appears during a `wait for`) could never
+  be matched; scripts used fixed delays or pulled the menu down again to
+  force a redraw.
+- **Status:** fixed without changing the default. Every captured string is
+  kept in a 256-entry ring with its emulated time; `wait text "x" recent
+  [window]` consults it (default look-back 5 s), `clear text` empties it,
+  `info text` shows it. A plain `wait text` keeps the old meaning, because
+  letting it see old text would let a stale string satisfy a later step.
+  Tests: `test/test_script_text.cpp` (ring), `text_recent*.dbg`,
+  `text_not_recent.dbg`, `text_cleared.dbg`, `text_too_old.dbg` in
+  `test/run_script_tests.sh`.
 
 ## 2026-10: found during feat/scsi-bus
 

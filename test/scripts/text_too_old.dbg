@@ -1,0 +1,5 @@
+# `recent` only reaches back as far as its window (default 5 s).
+set default-timeout 120s
+wait text "Special"
+wait for 8s
+wait text "File" 1s recent
