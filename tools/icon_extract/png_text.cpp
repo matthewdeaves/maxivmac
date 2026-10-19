@@ -8,6 +8,7 @@
 
 #include "png_text.h"
 #include <stb_image_write.h>
+#include <array>
 #include <cstring>
 #include <fstream>
 #include <vector>

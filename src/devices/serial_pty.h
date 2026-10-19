@@ -13,6 +13,7 @@
 
 #ifndef _WIN32
 
+#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>

@@ -9,6 +9,8 @@
 #define CACHE_LOG(fmt, ...) DIAG(CACHE, fmt "\n", ##__VA_ARGS__)
 
 #include <algorithm>
+#include <array>
+#include <cerrno>
 #include <chrono>
 #include <cstring>
 #include <fstream>

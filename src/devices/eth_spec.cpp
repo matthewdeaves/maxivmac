@@ -4,6 +4,7 @@
 
 #include "devices/eth_spec.h"
 
+#include <array>
 #include <cctype>
 #include <charconv>
 #include <string>
