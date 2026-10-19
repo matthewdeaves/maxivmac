@@ -374,6 +374,29 @@ target_include_directories(imgutil PRIVATE "${CMAKE_BINARY_DIR}")
 target_compile_options(imgutil PRIVATE -Wall -Wextra -Werror)
 
 # ---------------------------------------------------------------------------
+# ethhub: virtual Ethernet hub/switch over UDP (optional, POSIX only)
+# See docs/features/ETHHUB.md.  Standalone build: make -C tools/ethhub
+# ---------------------------------------------------------------------------
+option(MAXIVMAC_ETHHUB "Build the ethhub virtual LAN hub tool and its tests" ON)
+if(MAXIVMAC_ETHHUB AND UNIX)
+    add_executable(ethhub tools/ethhub/ethhub.c)
+    set_target_properties(ethhub PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_compile_options(ethhub PRIVATE -Wall -Wextra -Werror)
+    # Sanitized copy used by the ctest run
+    add_executable(ethhub-asan tools/ethhub/ethhub.c)
+    set_target_properties(ethhub-asan PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_compile_options(ethhub-asan PRIVATE -Wall -Wextra -Werror -g -O1
+        -fsanitize=address,undefined -fno-sanitize-recover=undefined)
+    target_link_options(ethhub-asan PRIVATE -fsanitize=address,undefined)
+    find_package(Python3 COMPONENTS Interpreter)
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME ethhub
+            COMMAND "${Python3_EXECUTABLE}" -I "${CMAKE_SOURCE_DIR}/tools/ethhub/test/test_ethhub.py"
+                    "$<TARGET_FILE:ethhub-asan>")
+    endif()
+endif()
+
+# ---------------------------------------------------------------------------
 # Unit tests
 # ---------------------------------------------------------------------------
 enable_testing()
