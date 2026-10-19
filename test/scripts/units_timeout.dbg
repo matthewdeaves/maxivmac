@@ -1,0 +1,4 @@
+# Time suffixes: a 100 ms timeout must expire after 0.100 s of emulated time
+# (not after 100 raw units).  Needs only a ROM; no disk.
+set default-timeout 100ms
+wait text "this text never appears"
