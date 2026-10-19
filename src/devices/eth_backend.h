@@ -36,5 +36,7 @@ public:
 	virtual size_t receive(std::span<uint8_t> dst) = 0;
 	// Once per emulated tick; do host I/O here, non-blocking.
 	virtual void poll() = 0;
+	// Frames dropped by the backend's receive queue (overflow) since start.
+	virtual uint64_t droppedFrames() const { return 0; }
 	virtual const char *name() const = 0;
 };

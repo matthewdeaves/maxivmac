@@ -441,3 +441,34 @@ TEST_CASE("daynaport fix: two adapters on one bus are addressed independently")
 	CHECK(p1->sent.empty());
 	CHECK(p2->sent.empty());
 }
+
+TEST_CASE("daynaport fix: statistics are real and GET MAC reports frames lost")
+{
+	DnRig r;
+	r.enable();
+	for (int i = 0; i < 70; i++) r.eth->inject(makeFrame(60, uint8_t(i))); // 6 overflow the 64-frame queue
+	CHECK(r.read(0x08, 1524, 0xC0, 21 * 70).size() == 21 * 70); // 1524 holds 21 records
+	CHECK(r.t.stats().rxFrames == 21);
+	CHECK(r.t.rxDropped() == 6);
+
+	Bytes m = r.read(0x09, 6, 0, 18);
+	CHECK(std::memcmp(m.data(), DaynaPortTarget::kDefaultMac.data(), 6) == 0);
+	CHECK(Bytes(m.begin() + 6, m.begin() + 14) == Bytes(8, 0)); // alignment, CRC errors
+	CHECK(Bytes(m.begin() + 14, m.begin() + 18) == Bytes({0, 0, 0, 6})); // frames lost, big-endian
+
+	r.command(0x0A, 60, 0);
+	r.output(makeFrame(60, 1), false);
+	r.finish(0);
+	CHECK(r.t.stats().txFrames == 1);
+	r.eth->acceptSend = false;
+	r.command(0x0A, 60, 0);
+	r.output(makeFrame(60, 1), false);
+	r.finish(2);
+	r.eth->acceptSend = true;
+	r.eth->link = false;
+	r.command(0x0A, 60, 0);
+	r.output(makeFrame(60, 1), false);
+	r.finish(0);
+	CHECK(r.t.stats().txFrames == 1);
+	CHECK(r.t.stats().txDropped == 2);
+}

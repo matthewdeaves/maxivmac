@@ -20,6 +20,7 @@ public:
 	bool inject(const std::vector<uint8_t> &f) { return rx_.push(f); }
 	size_t queued() const { return rx_.size(); }
 	uint64_t dropped() const { return rx_.dropped(); }
+	uint64_t droppedFrames() const override { return rx_.dropped(); }
 
 	bool linkUp() const override { return link; }
 	bool send(std::span<const uint8_t> f) override
