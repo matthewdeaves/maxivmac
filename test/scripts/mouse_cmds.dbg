@@ -1,0 +1,12 @@
+# Mouse commands only queue events; this just checks they parse and run.
+move 100 100
+mousedown 100 100
+mouseup
+click 120 80
+click 120 80 hold 500ms
+drag 10 10 100 100
+drag 10 10 100 100 hold 1s
+click 10 10 100 100
+key return
+info keys
+wait for 5s

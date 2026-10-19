@@ -1,0 +1,8 @@
+# Drag from the Apple menu title to "About the Finder..." and check that its
+# window text is drawn.
+wait text "Special"
+wait for 3s
+drag 22 9 30 25
+wait text "Total Memory"
+wait for 200ms
+screenshot "menu_pick"

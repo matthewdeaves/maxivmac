@@ -1,0 +1,3 @@
+# An explicit "50ms" timeout on the wait itself.
+wait for 20ms
+wait text "this text never appears" 50ms

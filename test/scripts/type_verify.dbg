@@ -1,6 +1,14 @@
-# Boot, open a DA, type text, verify it appears.
-set default-timeout 120s
-wait text "File"
-type "Hello World"
-wait text "Hello World"
+# Boot, open the disk window (select icon, cmd-O), make a new folder (cmd-N)
+# and type its name; the name is drawn as the text is typed.
+wait text "Special"
+wait for 3s
+click 475 45
+wait for 1s
+key cmd-O
+wait for 3s
+key cmd-N
+wait for 2s
+type "Hello"
+wait text "Hello" 10s
+wait for 200ms
 screenshot "typed"

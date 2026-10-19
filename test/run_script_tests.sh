@@ -1,18 +1,106 @@
 #!/bin/sh
-# Integration tests for the scripting system.
-# Requires a bootable disk image at test/fixtures/boot.hfs.
-set -e
+# Integration tests for the scripting system (headless .dbg scripts).
+#
+#   ./test/run_script_tests.sh [path/to/maxivmac]
+#
+# Environment:
+#   MAXIVMAC_TEST_ROM   Mac Plus ROM   (default: data/roms/MacPlus.ROM)
+#   MAXIVMAC_TEST_DISK  bootable System 6 HFS image
+#                       (default: extras/disks/608.hfs, the verify.sh disk)
+#   MAXIVMAC_OUT_DIR    scratch dir for screenshots (default: a temp dir)
+#
+# Tests that need the disk are SKIPped when it is absent; the disk is
+# copied before use because the emulator writes to it.  Exit status is 1 if
+# any test FAILs, 0 otherwise.
+set -u
 
-MAXIVMAC="${1:-./bld/macos/maxivmac}"
+DIR="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$DIR" || exit 1
+EMU="${1:-$DIR/bld/macos/maxivmac}"
+ROM="${MAXIVMAC_TEST_ROM:-$DIR/data/roms/MacPlus.ROM}"
+DISK="${MAXIVMAC_TEST_DISK:-$DIR/extras/disks/608.hfs}"
+SCRIPTS="$DIR/test/scripts"
 
-echo "=== boot_wait ==="
-"$MAXIVMAC" --headless --mac "Mac Plus" \
-    --disk test/fixtures/boot.hfs \
-    --dbg-script=test/scripts/boot_wait.dbg
+[ -x "$EMU" ] || { echo "ERROR: emulator not found at $EMU"; exit 1; }
+[ -f "$ROM" ] || { echo "SKIP all: ROM not found at $ROM"; exit 0; }
 
-echo "=== must_timeout (expect failure) ==="
-! "$MAXIVMAC" --headless --mac "Mac Plus" \
-    --disk test/fixtures/boot.hfs \
-    --dbg-script=test/scripts/must_timeout.dbg
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/maxivmac-script-tests.XXXXXX")"
+trap 'rm -rf "$WORK"' EXIT
+MAXIVMAC_OUT_DIR="${MAXIVMAC_OUT_DIR:-$WORK/out}"
+export MAXIVMAC_OUT_DIR
+mkdir -p "$MAXIVMAC_OUT_DIR"
 
-echo "All script tests passed."
+PASS=0
+FAIL=0
+SKIP=0
+
+pass() { echo "PASS  $1"; PASS=$((PASS + 1)); }
+fail() { echo "FAIL  $1: $2"; FAIL=$((FAIL + 1)); }
+skip() { echo "SKIP  $1: $2"; SKIP=$((SKIP + 1)); }
+
+# run <script> [with-disk]  -> sets $RC and $OUT (combined output)
+run() {
+    script="$1"
+    args=""
+    if [ "${2:-}" = disk ]; then
+        cp "$DISK" "$WORK/disk.hfs"
+        args="$WORK/disk.hfs"
+    fi
+    # Deliberately run from an unrelated directory: data/ lookup must not
+    # depend on the current directory.
+    OUT="$(cd "$WORK" && "$EMU" --headless --silent --model=MacPlus --rom="$ROM" \
+        --dbg-script="$SCRIPTS/$script" $args 2>&1)"
+    RC=$?
+}
+
+# expect <name> <script> <rc> [grep-pattern] [disk]
+expect() {
+    name="$1"; script="$2"; want="$3"; pat="${4:-}"; disk="${5:-}"
+    if [ -n "$disk" ] && [ ! -f "$DISK" ]; then
+        skip "$name" "disk $DISK not found (set MAXIVMAC_TEST_DISK)"
+        return
+    fi
+    run "$script" $disk
+    if [ "$RC" -ne "$want" ]; then
+        fail "$name" "exit $RC, wanted $want"
+        echo "$OUT" | tail -5
+    elif [ -n "$pat" ] && ! echo "$OUT" | grep -q "$pat"; then
+        fail "$name" "output lacks '$pat'"
+        echo "$OUT" | tail -5
+    else
+        pass "$name"
+    fi
+}
+
+# ── Needs only a ROM ───────────────────────────────────
+expect "default-timeout 100ms is 0.100 s"  units_timeout.dbg     1 "expired after 0.100 s emulated"
+expect "wait ... 50ms is 0.050 s"          explicit_timeout.dbg  1 "expired after 0.050 s emulated"
+expect "mouse commands parse and run"      mouse_cmds.dbg        0 "script completed"
+
+# ── Needs a bootable disk ──────────────────────────────
+expect "boot to Finder"                    boot_wait.dbg         0 "text match" disk
+expect "timeout exits non-zero"            must_timeout.dbg      1 "TIMEOUT" disk
+
+expect "open File menu" menu_open.dbg 0 "script completed" disk
+if [ -f "$MAXIVMAC_OUT_DIR/menu_open.png" ] && [ -f "$MAXIVMAC_OUT_DIR/menu_desktop.png" ]; then
+    if cmp -s "$MAXIVMAC_OUT_DIR/menu_open.png" "$MAXIVMAC_OUT_DIR/menu_desktop.png"; then
+        fail "menu screenshot differs from desktop" "images identical (menu did not open)"
+    else
+        pass "menu screenshot differs from desktop"
+    fi
+    # Determinism: an identical second run must give identical pixels.
+    cp "$MAXIVMAC_OUT_DIR/menu_open.png" "$WORK/first_menu.png"
+    run menu_open.dbg disk
+    if cmp -s "$WORK/first_menu.png" "$MAXIVMAC_OUT_DIR/menu_open.png"; then
+        pass "identical runs give identical screenshots"
+    else
+        fail "identical runs give identical screenshots" "screenshots differ"
+    fi
+fi
+
+expect "key and type edit a new folder name" type_verify.dbg 0 "script completed" disk
+expect "pick Apple menu item" menu_pick.dbg 0 "script completed" disk
+
+echo ""
+echo "PASS: $PASS  FAIL: $FAIL  SKIP: $SKIP"
+[ "$FAIL" -eq 0 ]

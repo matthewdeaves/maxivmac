@@ -1,0 +1,10 @@
+# Boot to the Finder, pull down the File menu and screenshot it.
+# Output goes to $MAXIVMAC_OUT_DIR (menu_desktop.png, menu_open.png).
+wait text "Special"
+wait for 3s
+screenshot "menu_desktop"
+mousedown 52 9
+wait text "Eject"
+wait for 200ms
+screenshot "menu_open"
+mouseup
