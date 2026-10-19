@@ -82,6 +82,10 @@ expect "mouse commands parse and run"      mouse_cmds.dbg        0 "script compl
 run /nonexistent/script.dbg
 if [ "$RC" -eq 2 ]; then pass "missing script exits 2"; else fail "missing script exits 2" "exit $RC"; fi
 
+# Headless needs a model; without one it used to crash on a null machine.
+OUT="$("$EMU" --headless --silent --rom="$ROM" 2>&1)"; RC=$?
+if [ "$RC" -eq 2 ] && echo "$OUT" | grep -q -- "--model"; then pass "headless without --model exits 2 with a message"; else fail "headless without --model exits 2 with a message" "exit $RC"; fi
+
 # ── Needs a bootable disk ──────────────────────────────
 expect "boot to Finder"                    boot_wait.dbg         0 "text match" disk
 expect "timeout exits non-zero"            must_timeout.dbg      1 "TIMEOUT" disk

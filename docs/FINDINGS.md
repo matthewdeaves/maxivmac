@@ -292,3 +292,15 @@ the branch that found them.
   5 out / 5 in, from a freshly prepared disk, including a guest Restart, no
   environment hacks. Needs F21 and F22 (without `--eth-latency` it is
   1 reply of 5). Not covered: TCP, DNS name resolution.
+
+## 2026-10: fix/tests-cwd pass
+
+### F26. `--headless` without `--model` crashed (null machine)
+
+- **Symptom:** `maxivmac --headless --rom=... [--dbg-script=...]` segfaulted in
+  `EmulatorShell::initMachine`. Without `--model` machine creation is left to
+  the model selector (`SetLaunchConfig`), which a headless run never reaches,
+  although `--help` says the default model is MacII.
+- **Status:** fixed: exits 2 with "--headless needs --model=MODEL ... or a .mac
+  file". Covered by `test/run_script_tests.sh`. Honouring the documented MacII
+  default instead would be a behaviour decision; not taken here.
