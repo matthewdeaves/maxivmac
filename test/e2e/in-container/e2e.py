@@ -212,6 +212,8 @@ class Run:
             return
         disk = self.path("disk.hfs")
         subprocess.run(["cp", "--sparse=always", disks[0], disk], check=True)
+        os.chmod(disk, 0o600)   # the input is mounted 0400 (retro-ci stages it owner-read-only); a copy keeps that mode and the
+                                # emulator then opens it write-protected ("locked startup disk" in the Chooser)
 
         # hub with the container's tap as one port, ingress pcap
         hub = self.spawn(["ethhub", "--listen", "127.0.0.1:%d" % HUB_PORT, "--tap", "tap0",
