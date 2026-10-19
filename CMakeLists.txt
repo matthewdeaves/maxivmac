@@ -119,6 +119,7 @@ set(MINIVMAC_SOURCES
     src/devices/rom.cpp
     src/devices/scsi.cpp
     src/devices/scsi_daynaport.cpp
+    src/devices/scsi_factory.cpp
     src/devices/eth_spec.cpp
     src/devices/eth_factory.cpp
     src/devices/ncr5380.cpp

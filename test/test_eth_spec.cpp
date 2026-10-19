@@ -94,3 +94,34 @@ TEST_CASE("eth factory: none gives a link-down backend; unknown kinds fall back 
 	REQUIRE(bad);
 	CHECK_FALSE(bad->linkUp());
 }
+
+#include "core/config_loader.h"
+
+namespace
+{
+LaunchConfig parseArgs(std::vector<const char *> args)
+{
+	args.insert(args.begin(), "maxivmac");
+	return ParseCommandLine(int(args.size()), const_cast<char **>(args.data()));
+}
+} // namespace
+
+TEST_CASE("cli: --scsiN, --eth and --eth-mac")
+{
+	LaunchConfig lc = parseArgs({"--scsi4=daynaport", "--scsi0=none", "--eth=slirp,hostfwd=tcp::8080-:80",
+								 "--eth-mac=02:00:00:aa:bb:cc"});
+	CHECK(lc.scsiTargets[4] == "daynaport");
+	CHECK(lc.scsiTargets[0] == "none");
+	CHECK(lc.scsiTargets[6].empty());
+	CHECK(lc.eth == "slirp,hostfwd=tcp::8080-:80");
+	CHECK(lc.ethMac == "02:00:00:aa:bb:cc");
+	CHECK(lc.diskPaths.empty()); // none of them was mistaken for a disk image
+}
+
+TEST_CASE("cli: --net-redir and its former name --slip-redir feed the same list")
+{
+	LaunchConfig lc = parseArgs({"--net-redir=tcp:8080:10.0.2.15:80", "--slip-redir=udp:53:10.0.2.15:53"});
+	REQUIRE(lc.netRedirs.size() == 2);
+	CHECK(lc.netRedirs[0] == "tcp:8080:10.0.2.15:80");
+	CHECK(lc.netRedirs[1] == "udp:53:10.0.2.15:53");
+}

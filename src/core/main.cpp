@@ -173,6 +173,7 @@ static void SixtiethSecondNotify()
 	if (auto *d = g_rig->findDevice<SonyDevice>()) d->update();
 
 	if (auto *d = g_rig->findDevice<SCCDevice>()) d->serialTick();
+	if (auto *d = g_rig->findDevice<SCSIDevice>()) d->tick();
 #if EmLocalTalk
 	if (auto *d = g_rig->findDevice<SCCDevice>()) d->localTalkTick();
 #endif
@@ -501,7 +502,11 @@ void SetLaunchConfig(const LaunchConfig &lc)
 		s_launchConfig.screenDepth = lc.screenDepth;
 	if (!lc.serialA.empty()) s_launchConfig.serialA = lc.serialA;
 	if (!lc.serialB.empty()) s_launchConfig.serialB = lc.serialB;
-	if (!lc.slipRedirs.empty()) s_launchConfig.slipRedirs = lc.slipRedirs;
+	if (!lc.netRedirs.empty()) s_launchConfig.netRedirs = lc.netRedirs;
+	for (size_t i = 0; i < lc.scsiTargets.size(); i++)
+		if (!lc.scsiTargets[i].empty()) s_launchConfig.scsiTargets[i] = lc.scsiTargets[i];
+	if (!lc.eth.empty()) s_launchConfig.eth = lc.eth;
+	if (!lc.ethMac.empty()) s_launchConfig.ethMac = lc.ethMac;
 
 	s_machineConfig = BuildMachineConfig(s_launchConfig);
 	s_emulatorConfig = BuildEmulatorConfig(s_launchConfig);
