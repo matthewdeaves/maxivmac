@@ -130,7 +130,7 @@ step_tidy() {
     # Unique findings (headers are reported once per TU): file:line:col check
     grep -E '^/.*: (warning|error): .*\[[a-zA-Z0-9.,_-]+\]$' "$OUT/clang-tidy.txt" \
         | sed -E "s|^$ROOT/||; s|^([^:]+:[0-9]+:[0-9]+): (warning\|error): .*\[([^]]+)\]\$|\1 \3|" \
-        | sort -u >"$OUT/clang-tidy.findings"
+        | sort -u >"$OUT/clang-tidy.findings" || true   # no findings = grep exit 1 = would abort under set -e
     local total; total="$(wc -l <"$OUT/clang-tidy.findings" | tr -d ' ')"
     metric tidy_total "$total"
     # Per-check counts (ratchet each one, so a new check class cannot hide in the total).
@@ -153,7 +153,7 @@ step_cppcheck() {
         --suppress='*:*/opt/homebrew/*' --suppress='*:*/libs/*' "${extra[@]}" \
         --template='{file}:{line}:{column}: {severity}:{id}: {message}' 2>"$OUT/cppcheck.txt" || true
     grep -E '^[^ ]+:[0-9]+:[0-9]+: (error|warning|performance|portability)' "$OUT/cppcheck.txt" \
-        | sed -E "s|^$ROOT/||" | sort -u >"$OUT/cppcheck.findings"
+        | sed -E "s|^$ROOT/||" | sort -u >"$OUT/cppcheck.findings" || true   # (same: zero findings must not abort)
     metric cppcheck_total "$(wc -l <"$OUT/cppcheck.findings" | tr -d ' ')"
     # cppcheck "error" severity is a hard gate (no baseline): real defects only.
     local errs; errs="$(grep -c ': error:' "$OUT/cppcheck.findings" || true)"
