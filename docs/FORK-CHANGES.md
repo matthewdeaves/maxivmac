@@ -55,3 +55,5 @@ still listens on every interface, `--speed=255`/`max` still works).
 `ctest` (unit tests, ethhub tests against an ASan build), `test/verify.sh`
 (the 6 golden files, unchanged), `test/run_script_tests.sh`,
 and end-to-end MacTCP ping on a Plus and an SE (`docs/features/NETWORKING_TESTING.md`).
+The containerised end-to-end ladder (`docs/features/NETWORKING_E2E.md`, rungs R1-R5: ping, PeerTalk discovery and TCP, byte-order case, BomberTalk lobby and a short game) also passes.
+The Windows build is cross-compile checked with `tools/windows-precheck.sh` (mingw-w64, gcc and clang); execution on Windows is covered only by CI.
