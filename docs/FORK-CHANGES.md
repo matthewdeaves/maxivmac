@@ -21,15 +21,15 @@ still listens on every interface, `--speed=255`/`max` still works).
 | Area | Now | Was |
 |---|---|---|
 | `--speed` / `--scale` | whole number in range (speed 0..5, 255 or `max`; scale 1..16), else warning and ignored | `atoi`, anything went through |
-| `--headless` | needs `--model=` or a `.mac` file (exit 2 otherwise) | -- |
-| script `key` | down for one tick; `key ... hold <duration>` for longer | -- |
-| script errors | a bad or unknown command exits 2 (including `build-init.sh` scripts in the GUI build) | -- |
-| `wait` default timeout | 60 s emulated (`set default-timeout`) | -- |
+| `--headless` | needs `--model=` or a `.mac` file (exit 2 otherwise) | segfault (F26) |
+| script `key` | down for one tick; `key ... hold <duration>` for longer | a very short press (about 0.16 ms), too brief for programs that poll the keyboard |
+| script errors | a bad or unknown command exits 2 (including `build-init.sh` scripts in the GUI build) | reported and the script carried on |
+| `wait` default timeout | 60 s emulated (`set default-timeout`) | 40,000,000 units (about 80 ms) |
 | Restart | re-inserts the startup disks | disks were gone |
 | debug socket | mode 0700 (umask 0077 around bind); SIGPIPE ignored | default umask |
 | SLIP decoder | an unterminated frame is capped at 64 KiB, then resynchronises | unbounded |
 | extfs | one guest read/write capped at 64 MiB | unbounded |
-| `--net-redir` / `--eth=slirp` forwards | loopback unless a host IP is given | -- |
+| `--net-redir` / `--eth=slirp` forwards | loopback unless a host IP is given | new in this fork |
 | `--slip-redir` | all interfaces, as upstream (a warning is printed) | same |
 
 ## New optional build dependencies
