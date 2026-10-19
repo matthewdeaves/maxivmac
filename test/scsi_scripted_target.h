@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <deque>
+#include <map>
 #include <vector>
 
 #include "devices/scsi_target.h"
@@ -33,6 +34,13 @@ public:
 	std::vector<Call> calls;
 	std::vector<std::vector<uint8_t>> received; // completed DataOut records
 	int busResets = 0, aborts = 0;
+	std::map<uint8_t, size_t> cdbLens; // opcode -> CDB length override
+
+	size_t cdbLength(uint8_t op) const override
+	{
+		auto it = cdbLens.find(op);
+		return it == cdbLens.end() ? 0 : it->second;
+	}
 
 	scsi::Step command(uint8_t lun, std::span<const uint8_t> cdb) override
 	{

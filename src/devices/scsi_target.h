@@ -8,6 +8,7 @@
 */
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <span>
 
@@ -41,6 +42,9 @@ class ScsiTarget
 public:
 	virtual ~ScsiTarget() = default;
 
+	// CDB length for `opcode`, or 0 to use the standard length for its group.
+	// Lets a target with vendor opcodes (e.g. 0x40, 0x80) say how long they are.
+	virtual size_t cdbLength(uint8_t /*opcode*/) const { return 0; }
 	// A complete CDB arrived.
 	virtual Step command(uint8_t lun, std::span<const uint8_t> cdb) = 0;
 	// One DataOut record has been received; may return another DataOut.
