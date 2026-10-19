@@ -295,7 +295,7 @@ void CmdType(Debugger &dbg, const std::vector<Token> &args)
 {
 	if (args.empty() || args[0].isEnd())
 	{
-		dbg.io().write("Usage: type \"text\"\n");
+		ScriptError(dbg, "Usage: type \"text\"");
 		return;
 	}
 
@@ -322,7 +322,7 @@ void CmdKey(Debugger &dbg, const std::vector<Token> &args)
 {
 	if (args.empty() || args[0].isEnd())
 	{
-		dbg.io().write("Usage: key <keyspec>  (e.g. cmd-S, return, cmd-shift-N)\n");
+		ScriptError(dbg, "Usage: key <keyspec>  (e.g. cmd-S, return, cmd-shift-N)");
 		return;
 	}
 
@@ -337,7 +337,7 @@ void CmdKey(Debugger &dbg, const std::vector<Token> &args)
 	KeySpec ks = ParseKeySpec(spec);
 	if (ks.keycode == 0xFF)
 	{
-		dbg.io().write("Error: cannot resolve key '%s'\n", spec.c_str());
+		ScriptError(dbg, ("Error: cannot resolve key '" + spec + "'").c_str());
 		return;
 	}
 
