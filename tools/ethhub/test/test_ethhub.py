@@ -4,6 +4,8 @@
 Build the hub with `make SAN=1` to run under ASan/UBSan: the tests check the
 exit status, so a sanitizer report fails the run.
 """
+import hmac
+import hashlib
 import os
 import random
 import re
@@ -110,7 +112,7 @@ def settle(*socks):
     time.sleep(0.15)
 
 
-class HubTest(unittest.TestCase):
+class HubBase(unittest.TestCase):
     def start(self, *args, **kw):
         self.hub = Hub(*args, **kw)
         self.addCleanup(self.finish)
@@ -134,6 +136,8 @@ class HubTest(unittest.TestCase):
         settle()
         return h, a, b, c
 
+
+class HubTest(HubBase):
     def test_hello_registers_without_traffic(self):
         h, a, b, c = self.three()
         st = h.stats()
@@ -182,7 +186,7 @@ class HubTest(unittest.TestCase):
         self.assertEqual(h.stats()["unknown_unicast"], 1)
 
     def test_mac_moves_between_clients(self):
-        h, a, b, c = self.three()
+        h, a, b, c = self.three("--mac-move=allow")
         h.send(b, frame(BCAST, mac(2)))
         recv(a), recv(c)
         h.send(c, frame(BCAST, mac(2)))  # mac2 moved to c
@@ -338,7 +342,7 @@ class HubTest(unittest.TestCase):
         # still alive and sane
         time.sleep(0.2)
         drain(a, b, c)
-        f = frame(BCAST, mac(1))
+        f = frame(BCAST, mac(100))  # a MAC the fuzz never used (mac-move=deny is the default)
         h.send(a, f)
         got = None
         deadline = time.time() + 15
@@ -417,6 +421,372 @@ class HubTest(unittest.TestCase):
                      ["--allow", "nonsense"], ["--allow", "10.0.0.0/33"], ["--allow", "10.0.0.0/"],
                      ["--max-macs", "4097"]):
             r = subprocess.run([HUB, *args], capture_output=True, timeout=10)
+            self.assertEqual(r.returncode, 2, args)
+
+
+def key_hello(key, t=None):
+    """The 13-byte keyed hello (see ethhub.c / docs/features/ETHHUB.md)."""
+    t = int(time.time()) if t is None else t
+    hdr = b"\xe7" + struct.pack(">I", t & 0xFFFFFFFF)
+    return hdr + hmac.new(key, b"ethhub-hello-v1" + hdr, hashlib.sha256).digest()[:8]
+
+
+KEY = b"correct horse battery staple"
+
+
+class HardeningTest(HubBase):
+    """Hash tables, MAC pinning, rate limits, flood cap, client eviction, auth."""
+
+    def keyfile(self, key=KEY, mode=0o600):
+        d = tempfile.TemporaryDirectory()
+        self.addCleanup(d.cleanup)
+        path = os.path.join(d.name, "key")
+        with open(path, "wb") as f:
+            f.write(key)
+        os.chmod(path, mode)
+        return path
+
+    def many(self, n, *args):
+        h = self.start(*args)
+        socks = [h.client() for _ in range(n)]
+        for s in socks:
+            h.send(s, b"")
+        settle()
+        return (h, *socks)
+
+    # -- hash table ------------------------------------------------------------
+
+    def test_mac_table_large_and_lru(self):
+        h = self.start("--max-macs", "4096", "--no-rate")
+        a, b = h.client(), h.client()
+        h.send(a, b"")
+        h.send(b, b"")
+        for i in range(5000):
+            h.send(a, frame(BCAST, b"\x02\x00\x00\x00" + struct.pack(">H", i)))
+            if i % 100 == 0:
+                drain(b)
+        settle()
+        drain(b)
+        st = h.stats()
+        self.assertEqual(st["macs"], 4096)
+        self.assertEqual(st["macs_evicted"], 5000 - 4096)
+        newest = b"\x02\x00\x00\x00" + struct.pack(">H", 4999)
+        f = frame(newest, mac(1))
+        h.send(b, f)
+        self.assertEqual(recv(a), f)
+        oldest = b"\x02\x00\x00\x00" + struct.pack(">H", 0)  # evicted: floods
+        h.send(b, frame(oldest, mac(1)))
+        self.assertEqual(h.stats()["unknown_unicast"] >= 1, True)
+
+    def test_mac_eviction_is_least_recently_seen(self):
+        h, a, b, c = self.three("--max-macs", "3", "--no-rate")
+        for i in (10, 11, 12):
+            h.send(a, frame(BCAST, mac(i)))
+        settle()
+        h.send(a, frame(BCAST, mac(10)))  # refresh 10: 11 is now the oldest
+        h.send(a, frame(BCAST, mac(13)))  # evicts 11
+        settle()
+        drain(a, b, c)
+        f = frame(mac(10), mac(1))
+        h.send(b, f)
+        self.assertEqual(recv(a), f)
+        self.assertIsNone(recv(c, 0.3))  # 10 survived, unicast
+        g = frame(mac(11), mac(1))
+        h.send(b, g)
+        self.assertEqual(recv(c), g)  # 11 was evicted: flooded
+
+    # -- MAC pinning -------------------------------------------------------------
+
+    def test_mac_pinned_to_live_owner(self):
+        h, a, b, c = self.three()
+        h.send(b, frame(BCAST, mac(2)))
+        recv(a), recv(c)
+        h.send(c, frame(BCAST, mac(2)))  # c tries to take over mac2
+        self.assertIsNone(recv(a, 0.3))
+        self.assertIsNone(recv(b, 0.3))  # the spoofed frame is dropped, not forwarded
+        f = frame(mac(2), mac(1))
+        h.send(a, f)
+        self.assertEqual(recv(b), f)  # still unicast to the owner
+        self.assertIsNone(recv(c, 0.3))
+        self.assertEqual(h.stats()["dropped_macmove"], 1)
+
+    def test_mac_move_allowed_after_owner_goes_quiet(self):
+        h, a, b, c = self.three("--live-window", "1")
+        h.send(b, frame(BCAST, mac(2)))
+        recv(a), recv(c)
+        time.sleep(2.2)  # b silent: not live any more
+        h.send(c, b"")
+        h.send(c, frame(BCAST, mac(2)))
+        recv(a), recv(b)
+        f = frame(mac(2), mac(1))
+        h.send(a, f)
+        self.assertEqual(recv(c), f)
+        self.assertIsNone(recv(b, 0.3))
+        self.assertEqual(h.stats()["dropped_macmove"], 0)
+
+    def test_mac_stays_pinned_while_owner_sends_keepalives(self):
+        h, a, b, c = self.three("--live-window", "2")
+        h.send(b, frame(BCAST, mac(2)))
+        recv(a), recv(c)
+        t0 = time.time()
+        while time.time() - t0 < 3.2:  # b only says hello
+            h.send(b, b"")
+            time.sleep(0.4)
+        h.send(c, frame(BCAST, mac(2)))
+        settle()
+        self.assertEqual(h.stats()["dropped_macmove"], 1)
+
+    def test_mac_move_allow_option_forms(self):
+        for args in (["--mac-move", "allow"], ["--mac-move=allow"]):
+            h, a, b, c = self.three(*args)
+            h.send(b, frame(BCAST, mac(2)))
+            recv(a), recv(c)
+            h.send(c, frame(BCAST, mac(2)))
+            settle()
+            self.assertEqual(h.stats()["dropped_macmove"], 0)
+            self.finish()
+
+    # -- rate limits ---------------------------------------------------------------
+
+    def test_frame_rate_limit(self):
+        h, a, b, c = self.three("--rate", "20")
+        for _ in range(300):
+            h.send(a, frame(mac(7), mac(1)))
+        settle()
+        st = h.stats()
+        self.assertGreater(st["dropped_rate"], 250)
+        self.assertLess(st["rx_frames"], 50)
+        self.assertEqual(st["rx_frames"] + st["dropped_rate"], 300)
+        # another client is not affected
+        f = frame(BCAST, mac(3))
+        h.send(b, f)
+        self.assertEqual(recv(a), f)
+
+    def test_byte_rate_limit(self):
+        h, a, b, c = self.three("--rate", "100000,2000")
+        for _ in range(10):
+            h.send(a, frame(mac(7), mac(1), b"p" * 986))  # 1000 bytes
+        settle()
+        st = h.stats()
+        self.assertLessEqual(st["rx_frames"], 3)
+        self.assertGreaterEqual(st["dropped_rate"], 7)
+
+    def test_no_rate(self):
+        h, a, b, c = self.three("--rate", "10", "--no-rate", "--flood-rate", "1000")
+        for _ in range(400):
+            h.send(a, frame(BCAST, mac(1)))
+        settle()
+        st = h.stats()
+        self.assertEqual(st["dropped_rate"], 0)
+        self.assertEqual(st["dropped_flood"], 0)
+        self.assertEqual(st["rx_frames"], 400)
+
+    def test_default_rate_is_generous(self):
+        h, a, b, c = self.three()
+        for _ in range(500):
+            h.send(a, frame(BCAST, mac(1), b"d" * 1000))
+        settle()
+        self.assertEqual(h.stats()["dropped_rate"], 0)
+
+    def test_flood_cap_per_client(self):
+        h = self.start("--flood-rate", "100000")  # depth 50 KB
+        socks = [h.client() for _ in range(10)]
+        for s in socks:
+            h.send(s, b"")
+        settle()
+        big = frame(BCAST, mac(1), b"b" * 1500)  # x9 copies = 13.6 KB per flood
+        for _ in range(20):
+            h.send(socks[0], big)
+        settle()
+        st = h.stats()
+        self.assertGreaterEqual(st["dropped_flood"], 14)
+        self.assertLessEqual(st["tx_frames"], 6 * 9)
+        # another client can still flood; unicast of the first client is not charged
+        h.send(socks[1], frame(BCAST, mac(2)))
+        self.assertIsNotNone(recv(socks[2]))
+
+    def test_flood_cap_global(self):
+        h = self.start("--flood-rate", "100000")  # per client 50 KB, hub 200 KB
+        socks = [h.client() for _ in range(10)]
+        for s in socks:
+            h.send(s, b"")
+        settle()
+        for k, s in enumerate(socks):
+            for _ in range(3):  # each client stays inside its own budget
+                h.send(s, frame(BCAST, mac(k + 1), b"b" * 1500))
+        settle()
+        st = h.stats()
+        self.assertGreaterEqual(st["dropped_flood"], 8)
+        self.assertLess(st["tx_frames"], 30 * 9)
+
+    def test_flood_cap_off(self):
+        h = self.start("--flood-rate", "0")
+        socks = [h.client() for _ in range(10)]
+        for s in socks:
+            h.send(s, b"")
+        settle()
+        for _ in range(30):
+            h.send(socks[0], frame(BCAST, mac(1), b"b" * 1500))
+        settle()
+        self.assertEqual(h.stats()["dropped_flood"], 0)
+
+    # -- client table ---------------------------------------------------------------
+
+    def test_full_table_evicts_idle_client(self):
+        h = self.start("--max-clients", "2", "--live-window", "1")
+        a, b, c = h.client(), h.client(), h.client()
+        h.send(a, frame(BCAST, mac(1)))
+        h.send(b, b"")
+        time.sleep(2.2)
+        h.send(b, b"")  # b is live, a idle: a is the victim
+        h.send(c, b"")
+        settle()
+        st = h.stats()
+        self.assertEqual(st["clients"], 2)
+        self.assertEqual(st["clients_evicted"], 1)
+        self.assertEqual(st["dropped_full"], 0)
+        f = frame(BCAST, mac(5))
+        h.send(b, f)
+        self.assertEqual(recv(c), f)
+        self.assertIsNone(recv(a, 0.3))
+        h.send(c, frame(mac(1), mac(6)))  # a's MAC was purged with it: floods to b
+        self.assertIsNotNone(recv(b))
+
+    def test_full_table_keeps_live_clients(self):
+        h = self.start("--max-clients", "2")  # default live window 15 s
+        a, b, c = h.client(), h.client(), h.client()
+        for s in (a, b, c):
+            h.send(s, b"")
+        settle()
+        st = h.stats()
+        self.assertEqual((st["clients"], st["dropped_full"], st["clients_evicted"]), (2, 1, 0))
+
+    def test_per_ip_client_cap(self):
+        h = self.start("--max-per-ip", "2", "--max-clients", "10")
+        a, b, c = h.client(), h.client(), h.client()
+        for s in (a, b, c):
+            h.send(s, b"")
+        h.send(c, frame(BCAST, mac(3)))
+        settle()
+        st = h.stats()
+        self.assertEqual(st["clients"], 2)
+        self.assertEqual(st["dropped_ip_cap"], 2)
+        self.assertEqual(st["rx_frames"], 0)
+
+    def test_per_ip_cap_zero_is_unlimited(self):
+        h, *socks = self.many(20, "--max-per-ip", "0", "--max-clients", "30")
+        self.assertEqual(h.stats()["clients"], 20)
+
+    # -- authentication -----------------------------------------------------------------
+
+    def test_key_file_must_be_private_and_long_enough(self):
+        for kf in (self.keyfile(mode=0o644), self.keyfile(mode=0o640), self.keyfile(b"short"),
+                   self.keyfile(b"\n\n\n"), "/nonexistent/key"):
+            r = subprocess.run([HUB, "--key-file", kf], capture_output=True, timeout=10, check=False)
+            self.assertEqual(r.returncode, 2, kf)
+        # a trailing newline is not part of the key
+        h = self.start("--key-file=" + self.keyfile(KEY + b"\n"))
+        a = h.client()
+        h.send(a, key_hello(KEY))
+        settle()
+        self.assertEqual(h.stats()["clients"], 1)
+        self.assertIn("authentication on", h.errtext())
+
+    def test_keyed_hub_drops_unauthenticated_sources(self):
+        h = self.start("--key-file", self.keyfile())
+        a, b = h.client(), h.client()
+        h.send(a, key_hello(KEY))
+        h.send(b, b"")  # an empty hello does not register
+        h.send(b, frame(BCAST, mac(2)))  # nor does a frame
+        settle()
+        st = h.stats()
+        self.assertEqual(st["clients"], 1)
+        self.assertEqual(st["dropped_unauth"], 2)
+        self.assertEqual(st["rx_frames"], 0)
+        self.assertEqual(st["hellos"], 1)
+        # b cannot read the LAN's broadcasts either
+        h.send(a, frame(BCAST, mac(1)))
+        self.assertIsNone(recv(b, 0.3))
+
+    def test_keyed_hello_rejects_wrong_key_and_stale_time(self):
+        h = self.start("--key-file", self.keyfile(), "--auth-window", "30")
+        s = h.client()
+        now = int(time.time())
+        bad = [key_hello(b"another key, same length!"), key_hello(KEY, now - 600), key_hello(KEY, now + 600),
+               key_hello(KEY)[:-1] + b"\x00" if key_hello(KEY)[-1] else key_hello(KEY)[:-1] + b"\x01"]
+        for d in bad:
+            h.send(s, d)
+        settle()
+        st = h.stats()
+        self.assertEqual(st["clients"], 0)
+        self.assertEqual(st["dropped_unauth"], 4)
+        h.send(s, key_hello(KEY, now - 20))  # inside the window
+        settle()
+        self.assertEqual(h.stats()["clients"], 1)
+
+    def test_keyed_clients_talk_and_keep_alive(self):
+        h = self.start("--key-file", self.keyfile(), "--client-timeout", "2")
+        a, b = h.client(), h.client()
+        h.send(a, key_hello(KEY))
+        h.send(b, key_hello(KEY))
+        settle()
+        f = frame(BCAST, mac(1))
+        h.send(a, f)
+        self.assertEqual(recv(b), f)
+        g = frame(mac(1), mac(2))
+        h.send(b, g)
+        self.assertEqual(recv(a), g)
+        t0 = time.time()
+        while time.time() - t0 < 3.2:  # keyed hellos keep the client alive
+            h.send(a, key_hello(KEY))
+            time.sleep(0.4)
+        st = h.stats()
+        self.assertEqual(st["clients"], 1)
+        # b expired: its datagrams are unauthenticated again
+        h.send(b, frame(BCAST, mac(2)))
+        settle()
+        self.assertEqual(h.stats()["dropped_unauth"], 1)
+
+    def test_unkeyed_hub_is_unchanged_by_keyed_hello(self):
+        h = self.start()
+        a = h.client()
+        h.send(a, key_hello(KEY))  # 13 bytes: too short for a frame, as before
+        h.send(a, b"")
+        settle()
+        st = h.stats()
+        self.assertEqual(st["dropped_short"], 1)
+        self.assertEqual(st["hellos"], 1)
+
+    def test_keyed_uplink(self):
+        kf = self.keyfile()
+        h1 = self.start("--key-file", kf)
+        a = h1.client()
+        h1.send(a, key_hello(KEY))
+        h2 = Hub("--connect", "127.0.0.1:%d" % h1.addr[1], "--key-file", kf)
+        self.addCleanup(lambda: self.assertEqual(h2.stop()[0], 0))
+        b = h2.client()
+        h2.send(b, key_hello(KEY))
+        time.sleep(1.0)
+        f = frame(BCAST, mac(1))
+        h1.send(a, f)
+        self.assertEqual(recv(b), f)
+        g = frame(mac(1), mac(2))
+        h2.send(b, g)
+        self.assertEqual(recv(a), g)
+
+    def test_keyed_hub_still_checks_the_allow_list(self):
+        h = self.start("--key-file", self.keyfile(), "--allow", "10.0.0.0/8")
+        a = h.client()
+        h.send(a, key_hello(KEY))
+        settle()
+        st = h.stats()
+        self.assertEqual((st["clients"], st["dropped_denied"]), (0, 1))
+
+    def test_bad_new_args(self):
+        for args in (["--mac-move", "maybe"], ["--rate", "0"], ["--rate", "5,0"], ["--rate", "x"],
+                     ["--flood-rate", "-1"], ["--max-per-ip", "-1"], ["--live-window", "0"],
+                     ["--rate"]):
+            r = subprocess.run([HUB, *args], capture_output=True, timeout=10, check=False)
             self.assertEqual(r.returncode, 2, args)
 
 

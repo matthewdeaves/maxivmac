@@ -45,7 +45,9 @@ still listens on every interface, `--speed=255`/`max` still works).
 
 - `daynaport,multiframe` is unverified against real software.
 - `--eth-latency` is tuned on MacTCP Ping only.
-- ethhub has no authentication and no rate limit: keep it on loopback or a trusted LAN.
+- ethhub authentication is a shared-secret join ticket (`--key-file`, off by default): no encryption, no per-datagram
+  integrity, hellos replayable for 60 s. Rate limits are per client and generous. Keep it on loopback or a trusted LAN
+  (FINDINGS F46).
 - The Mac SE needs `--speed=0` for AppleTalk start-up (FINDINGS F41).
 - A slirp guest can reach the host's loopback (FINDINGS F38).
 - Windows builds are not verified by the author.

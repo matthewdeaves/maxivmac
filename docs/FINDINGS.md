@@ -291,7 +291,8 @@ the branch that found them.
   (`--listen ADDR:PORT` with a warning and `--allow CIDR`; `hostfwd=tcp:HOSTIP:...`).
   The ethhub container still listens on 0.0.0.0 inside (Docker publishing needs
   it) and is published on 127.0.0.1.
-- **Deferred:** ethhub has no authentication and no per-client rate limit.
+- **Deferred:** ethhub has no authentication and no per-client rate limit
+  (done: F43 to F46).
 
 ### F16. A live slirp link made scripted runs non-deterministic
 
@@ -605,3 +606,80 @@ command mix are the same as on the Plus.
   Covered by `test/run_script_tests.sh` ("Mac SE: Restart boots from the same
   disk again", skipped without `MAXIVMAC_TEST_ROM_SE` / `data/roms/MacSE.ROM`);
   the unfixed build times out there.
+
+
+## 2026-10: ethhub hardening
+
+Follow-up to F15 and the static-analysis review of `tools/ethhub/ethhub.c`.
+Each item has tests in `tools/ethhub/test/test_ethhub.py` (written first; they
+fail against the old hub) and `test/test_eth_hub.cpp`.
+
+### F43. ethhub tables: linear scans, and a hello flood could lock the client table
+
+- **Symptom:** the MAC table (cap 4096) and the client table were linear scans,
+  twice per frame; 64 hellos from 64 source ports filled the default client
+  table and refused real clients until `--client-timeout`; one source IP could
+  take every slot.
+- **Status:** fixed. Both tables are chained hash tables (per-process hash
+  seed) with an LRU list: O(1) lookup, learn, touch and eviction; ageing is
+  O(expired). A full client table evicts the least recently seen client if it
+  has been idle for `--live-window` (15 s), else refuses; `--max-per-ip`
+  (default 16) caps one source IP. Memory is bounded by `--max-clients`,
+  `--max-macs`. No behaviour change for the previous tests except that MAC
+  eviction is now exact LRU (it was least `last_seen` in whole seconds, ties by
+  index).
+- **Not covered:** a hello flood from many (spoofed) source IPs still churns the
+  idle entries of a table full of idle clients; clients with a keepalive are
+  safe from it.
+
+### F44. ethhub MAC hijack (any client could take any MAC)
+
+- **Symptom:** the hub learned the source MAC of every frame, so a client could
+  take over another client's MAC and receive its unicast traffic.
+- **Status:** fixed with `--mac-move=deny` (default). A MAC owned by a live
+  client (any datagram, keepalive hellos included, within `--live-window`) is
+  not moved; the frame is dropped and counted (`dropped_macmove`). For TAP and
+  uplink the entry's own age is used. `--mac-move=allow` is the old behaviour.
+- **Decision:** default deny, because the only legitimate move is a restart on
+  a new port, and that waits at most the live window after the old process
+  stopped; a timer on the entry alone would let an attacker take a quiet
+  guest's MAC and, with the spoofed frames refreshing it, lock the real owner
+  out. Dropping (not forwarding without learning) keeps a spoofed frame off the
+  LAN.
+- **Consequence for existing setups:** two senders with the same MAC (two
+  emulators with the same `--eth-mac` on one hub) no longer silently steal
+  each other's traffic; the second is dropped while the first is up. A QEMU
+  endpoint that never sends hellos and is idle for 15 s can be displaced.
+
+### F45. ethhub: no rate limit, one broadcast amplified x63
+
+- **Status:** fixed. Per-client token buckets `--rate FPS[,BPS]` (default
+  10000 frames/s, 12.5 MB/s); a flood costs length x copies against
+  `--flood-rate` (default 2 MB/s per client, the hub overall 4x), dropped whole
+  when over budget. `--no-rate` and `--flood-rate 0` turn them off. Counters
+  `dropped_rate`, `dropped_flood`.
+- **Not verified:** the defaults against a real guest under load (the emulated
+  DaynaPORT is far below them; no run came near them). Measured only with
+  Python senders on loopback.
+
+### F46. ethhub authentication (optional shared secret)
+
+- **Status:** added, off by default. `--key-file FILE` (mode 0600, 16..1024
+  bytes): a keyed 13-byte hello (`0xE7`, unix seconds, 8-byte truncated
+  HMAC-SHA256) replaces the empty hello; only addresses that sent one may send
+  frames; others are dropped (`dropped_unauth`). The emulator sends it with
+  `--eth=hub:HOST:PORT,key=FILE` (or `MAXIVMAC_HUB_KEY_FILE`). The wire is
+  unchanged without a key, and frames never change, so the QEMU dgram goal
+  stands; a QEMU endpoint cannot join a keyed hub (it cannot send the hello),
+  use `--allow` for those.
+- **Threat model (see ETHHUB.md):** stops casual LAN abuse (join, read floods,
+  inject, fill tables, reflect). Does not stop anyone who can sniff (replay of
+  a hello for 60 s from any address, since NAT hides the client's address, and
+  everything is in clear) or spoof a registered client's source address;
+  one shared secret, no revocation; HMAC verification cost per 13-byte datagram.
+  Per-datagram MACs, counters and nonces were left out on purpose.
+- **Not verified:** a hub and an emulator on two machines with skewed clocks;
+  QEMU; an emulator + guest end to end through a keyed hub is covered only by
+  the `eth_hub_ethhub` ctest (three EthHub backends), see the notes in the
+  commit for the e2e run.
+

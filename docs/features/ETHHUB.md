@@ -9,7 +9,7 @@ Status: the emulator joins a hub with `--eth=hub:HOST:PORT` (`EthHub` in
 `src/devices/eth_hub.{h,cpp}`, see `NETWORKING_DAYNAPORT.md`), alongside
 `--eth=slirp`.
 
-## Wire format (fixed; do not extend)
+## Wire format (fixed; the only addition is the optional keyed hello)
 
 - Exactly **one raw Ethernet frame per UDP datagram**, both directions.
 - 14..1514 bytes: dst MAC, src MAC, ethertype, payload. No FCS, no extra header.
@@ -17,6 +17,11 @@ Status: the emulator joins a hub with `--eth=hub:HOST:PORT` (`EthHub` in
   client (an emulator may have nothing to send yet) and refreshes its timeout.
 - A client is identified by its UDP source address (IPv4 address + port).
 - Datagrams of 1..13 bytes or more than 1514 bytes are dropped and counted.
+  The one exception is the optional **keyed hello** (13 bytes, see
+  Authentication), which only a hub started with `--key-file` looks at; a hub
+  without a key drops it as "short", exactly as before. Without `--key-file`
+  the wire is byte-for-byte what it always was, and a QEMU dgram endpoint
+  still works.
 
 ## Behaviour
 
@@ -29,9 +34,35 @@ Status: the emulator joins a hub with `--eth=hub:HOST:PORT` (`EthHub` in
   Ageing granularity is one second, so a timeout of N fires between N-1 and N
   seconds. Clients must therefore send a keepalive well inside the timeout
   (every 10-20 s is plenty).
-- Tables are bounded: `--max-clients` (64, max 4096): new clients beyond the
-  limit are ignored and counted (`dropped_full`); `--max-macs` (1024, max
-  4096; lookups are linear scans): the least recently seen MAC is evicted.
+- Tables are bounded: `--max-clients` (64, max 4096) and `--max-macs` (1024,
+  max 4096). Both are chained hash tables (seeded hash, O(1) lookup) with an
+  LRU list: a full MAC table evicts the least recently seen MAC in O(1), and
+  ageing only visits what expires.
+- A full client table evicts the least recently seen client **if it has been
+  idle for `--live-window`** (default 15 s, three keepalives); otherwise the
+  newcomer is refused and counted (`dropped_full`). A client that keeps its
+  hellos going is therefore never pushed out by newcomers, and a table full of
+  dead clients does not lock the LAN for `--client-timeout`. One source IP can
+  hold at most `--max-per-ip` clients (default 16, 0 = no limit; counted as
+  `dropped_ip_cap`). Mind NAT: everything behind one NAT/Docker gateway is one
+  IP.
+- **MAC pinning** (`--mac-move=deny|allow`, default `deny`): a MAC learned on
+  client A cannot be taken over by client B while A is **live**, i.e. A sent
+  any datagram (frame or hello) within `--live-window` seconds. B's frame is
+  dropped, not forwarded (`dropped_macmove`; `--verbose` logs it). For the TAP
+  port and the `--connect` uplink, which carry many MACs and never go away,
+  the MAC entry itself must have been refreshed within the window. `allow`
+  restores the old learn-anywhere behaviour.
+- **Rate limits**: per client a token bucket of `--rate FPS[,BPS]` (default
+  10000 frames/s and 12.5 MB/s, i.e. 100 Mbit/s; burst a quarter of a second,
+  at least 8 frames / one full frame); excess datagrams are dropped before
+  anything else happens (`dropped_rate`). Broadcast amplification:
+  `--flood-rate BPS` (default 2 MB/s) caps the egress bytes one client can
+  cause by flooding (broadcast, multicast, unknown unicast; a frame costs
+  length x copies, so one 1514-byte broadcast to 63 ports costs 95 KB), and the
+  hub as a whole has a bucket 4x as big; a flood over budget is dropped whole
+  (`dropped_flood`). `--flood-rate 0` turns the flood cap off, `--no-rate`
+  turns off both. Known unicast is never charged as a flood.
 - Counters are printed to stderr on SIGUSR1 and on exit (SIGINT/SIGTERM).
 - `--verbose` logs client joins/leaves and one line per frame.
 - `--pcap FILE` writes every frame the hub receives (ingress) as a standard
@@ -48,16 +79,87 @@ Status: the emulator joins a hub with `--eth=hub:HOST:PORT` (`EthHub` in
   explicit address, e.g. `--listen 0.0.0.0:5555`, and prints a warning.
 - `--allow CIDR` (repeatable, `a.b.c.d[/n]`): only datagrams from these
   sources are accepted; others are counted (`dropped_denied`).
+- `--key-file FILE` (also `--auth-window SEC`, default 60): see Authentication.
+- Every option also takes the `--name=value` form.
+
+### Why `--mac-move=deny` is the default
+
+Legitimate MAC moves exist: a guest restarted on a new UDP port (the emulator
+restarts, or a second emulator is started with the same `--eth-mac`). Denying
+them for ever would be a bug; allowing everyone to move any MAC at any time is
+the hijack. The compromise is *liveness*, not a timer on the entry: the owner
+is protected while it keeps talking to the hub, including keepalive hellos (the
+emulator sends one every 5 s), and released `--live-window` seconds (15)
+after it goes quiet. So an attacker cannot take a MAC from a running guest
+(and, because the spoofed frame is dropped rather than learned, cannot lock the
+owner out either), and a restarted guest waits at most 15 s after its old
+process stopped. What it does not cover: a client that sends no hello and
+stays silent for 15 s (a QEMU endpoint, which never sends hellos) can have its
+MAC taken over; use `--mac-move=allow` or a keyed hub for those. A hub
+chain by `--connect` must remain a tree (as before), then no MAC legitimately
+appears on two ports at once.
+
+### Authentication (`--key-file`)
+
+Optional, off by default. With `--key-file FILE` (the file must not be
+accessible by group or others, like an ssh key; 16..1024 bytes, trailing
+newline ignored) the empty hello no longer registers a client. A client joins
+with a **keyed hello**, a 13-byte datagram:
+
+```
+byte 0       0xE7
+bytes 1..4   unix time, seconds, big endian
+bytes 5..12  first 8 bytes of HMAC-SHA256(key, "ethhub-hello-v1" || bytes 0..4)
+```
+
+13 bytes is the range no Ethernet frame can have, so it is never mistaken for
+a frame, and an old or unkeyed hub drops it as a short datagram. The hub
+accepts a hello whose time is within `--auth-window` seconds of its own clock
+(hosts need roughly synchronised clocks; the default is 60 s) and whose tag
+matches. The sender's UDP address then becomes a client; frames are unchanged
+(no per-frame header) and are accepted from known client addresses only.
+Datagrams from any other address, including empty hellos and frames, are
+dropped (`dropped_unauth`). A client must resend the keyed hello within the
+client timeout (the emulator does it every 5 s). `--connect` sends keyed
+hellos when the hub has a key, so a keyed tree needs the same key everywhere.
+The emulator side: `--eth=hub:HOST:PORT,key=FILE` or the environment variable
+`MAXIVMAC_HUB_KEY_FILE` (the option wins), same file rules.
+
+What this stops: a host on the LAN (or a port scanner) that does not have the
+key cannot join, receive floods, send frames, take MACs, fill the client
+table or use the hub as a reflector via spoofed sources that do not carry a
+valid hello. What it does **not** stop, by design (this is a join ticket for
+casual abuse, not a secure channel):
+
+- *No confidentiality or integrity*: frames travel in clear and are not
+  authenticated per datagram. Anyone who can read the traffic sees the LAN.
+- *Replay*: a captured hello is valid for `--auth-window` (60 s) from any
+  source address (the tag does not cover the address because NAT and Docker
+  hide the client's real one). Someone who can sniff the path can join.
+- *Source spoofing after joining*: once a client address is registered, anyone
+  who can forge that UDP source address can inject frames as it, for as long
+  as it lives, and can keep it alive.
+- *A shared key*: all clients have the same secret; there is no revocation
+  other than changing it everywhere.
+- *CPU*: every 13-byte datagram starting with 0xE7 costs one HMAC to check.
+  That is a few microseconds; there is no separate limit on it.
+- *UDP floods* that merely fill the socket or the network path.
+
+Use `--allow` as well, and a VPN/SSH tunnel or a trusted LAN when any of that
+matters. The key must also not be passed on a command line (it is a file for
+that reason).
 
 ### Security
 
-There is no authentication. Any datagram from any source that reaches the
-socket makes that source a client, and every broadcast is flooded to all
-clients. A hub that listens beyond loopback can therefore be used for UDP
-reflection and amplification (spoofed source addresses), lets anyone who can
-reach it read the LAN's broadcast traffic, and lets them claim a MAC. Hence
-the loopback default, the warning, and `--allow`. There is no per-client
-rate limit (deferred); do not expose a hub to the internet.
+Without `--key-file` there is no authentication. Any datagram from any source
+that reaches the socket makes that source a client, and every broadcast is
+flooded to all clients. A hub that listens beyond loopback can therefore be
+used for UDP reflection and amplification (spoofed source addresses) and lets
+anyone who can reach it read the LAN's broadcast traffic. Hence the loopback
+default, the warning, `--allow`, and the hardening above: MAC pinning, rate
+and flood caps, bounded tables that cannot be locked by a hello flood, and
+the optional key. Do not expose a hub to the internet: nothing here encrypts
+anything, and a rate limit bounds an abuser, it does not stop one.
 
 Single-threaded `poll()` loop; plain C11 + POSIX, no dependencies. Runs on
 macOS and Linux.
@@ -66,9 +168,10 @@ macOS and Linux.
 
 - CMake: `-DMAXIVMAC_ETHHUB=ON` (default on UNIX) adds targets `ethhub` and
   `ethhub-asan`; `ctest -R ethhub` runs `tools/ethhub/test/test_ethhub.py`
-  against the ASan/UBSan binary (about 25 s; includes registration, flooding,
-  unicast, ageing, size limits, table bounds, pcap, uplink, the loopback
-  default and `--allow`, a 6000-datagram random fuzz).
+  against the ASan/UBSan binary (about 45 s; includes registration, flooding,
+  unicast, ageing, size limits, table bounds and LRU, MAC pinning, rate and
+  flood caps, client eviction, the per-IP cap, authentication, pcap, uplink,
+  the loopback default and `--allow`, a 6000-datagram random fuzz).
 - Standalone: `make -C tools/ethhub` (add `SAN=1` for sanitizers), or just
   `cc -std=c11 -O2 -o ethhub tools/ethhub/ethhub.c`.
 - Manual: `python3 -I tools/ethhub/test/test_ethhub.py ./ethhub`.
@@ -137,18 +240,20 @@ echo: hello-tcp                                          (TCP 10.88.0.20 -> 10.8
 
 ## Limits and caveats
 
-- **Known abuse limits** (measured against a hub on loopback with scripts;
-  no code change, the protection is the loopback default and `--allow`):
-  - *Client table exhaustion*: 64 datagrams from 64 other source ports fill the
-    default table (`--max-clients`), after which a new legitimate client is
-    refused until entries expire (`--client-timeout`).
-  - *Amplification*: one 1514-byte broadcast is sent to every other client,
-    63 copies (about 95 KB) with 64 clients. With a spoofed UDP source address
-    a hub reachable from outside is a reflector.
-  - *MAC hijack*: the hub learns the source MAC of any frame, so a client that
-    sends a frame with another client's MAC as source takes over that MAC's
-    unicast traffic until the entry is relearned or expires.
-  - *Client table is not authenticated or rate limited* (also see Security).
+- **Abuse limits** (measured against the hub on loopback with scripts before
+  the hardening; each is now covered by a test in `test_ethhub.py`):
+  - *Client table exhaustion* (64 hellos from 64 source ports filled the table
+    until `--client-timeout`): idle clients are evicted, one IP is capped at
+    `--max-per-ip`. Still possible: a flood of hellos from many *source IPs*
+    (spoofed) that keeps the table full of fresh entries; only a key or
+    `--allow` stops that, and clients that keep their keepalive going are
+    never evicted by it.
+  - *Amplification* (one 1514-byte broadcast = 63 copies, about 95 KB): capped
+    per client and for the hub by `--flood-rate`. A reachable hub is still a
+    reflector for traffic up to the cap unless it has a key or `--allow`.
+  - *MAC hijack*: `--mac-move=deny`, see above.
+  - *Rate*: `--rate`. The defaults are generous (100 Mbit/s per client), so
+    they bound an abuser to a LAN-sized stream, they do not protect a slow link.
   - A fuzz run of random and truncated datagrams (several seeds, ASan build)
     found no crash or sanitizer report.
 - **MTU**: frames above 1514 bytes (1500 MTU) are dropped; UDP datagrams are
@@ -178,8 +283,9 @@ echo: hello-tcp                                          (TCP 10.88.0.20 -> 10.8
   one-way latency through the hub median 74 us / p99 327 us; 170k pps offered,
   98.8 % delivered with the hub not saturated. On the macOS host loopback
   here, Python could only send about 3k pps even to a plain sink socket, so no
-  meaningful macOS number was taken. Frame lookup is linear in table size
-  (fine for the default limits).
+  meaningful macOS number was taken. Lookups are O(1) hash lookups now (they
+  were linear scans); the latency figures above are from the linear version
+  and were not re-measured.
 
 ## QEMU compatibility (NOT verified)
 

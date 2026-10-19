@@ -114,8 +114,9 @@ The adapter sits on an emulated NCR5380 SCSI bus that accepts targets at any
 ID ([docs/features/SCSI.md](docs/features/SCSI.md)).  For a shared virtual
 LAN between several emulators and POSIX peers, `tools/ethhub` is a small UDP
 Ethernet hub and `--eth=hub:HOST:PORT` connects the emulator to it
-([docs/features/ETHHUB.md](docs/features/ETHHUB.md)). **ethhub has no
-authentication or rate limiting: keep it on loopback or a trusted network.**
+([docs/features/ETHHUB.md](docs/features/ETHHUB.md)). **ethhub has rate limits and
+MAC pinning, and an optional shared-secret key (`--key-file`), but no encryption:
+keep it on loopback or a trusted network.**
 
 `daynaport,multiframe` is experimental (not verified against real software).
 Everything this fork adds over upstream, and the behaviour changes, are
@@ -239,7 +240,7 @@ maxivmac --model=MacPlus --shared ~/Desktop/shared MacPlus.mac
 | `--serial-a=MODE` | Modem port: `loopback` `slip` `pty` `file:tx=…` |
 | `--net-redir=SPEC` | Port forward for slirp (SLIP or `--eth=slirp`), listening on 127.0.0.1: `tcp:hostport:guestip:guestport` (`--slip-redir` is an alias) |
 | `--scsiN=TYPE` | Attach a SCSI target at ID N (0-6): `daynaport[,multiframe]` or `none` (compact Macs; refused on the Mac II family) |
-| `--eth=SPEC` | Ethernet backend for the DaynaPORT: `slirp[,hostfwd=tcp:[HOSTIP]:HOSTPORT-GUESTIP:GUESTPORT]` `hub:HOST:PORT` (join an [ethhub](docs/features/ETHHUB.md) LAN over UDP) or `none`. Default `slirp`, but `none` (cable out) with `--headless` or `--dbg-script` so scripted runs stay repeatable; forwards listen on 127.0.0.1 unless HOSTIP is given |
+| `--eth=SPEC` | Ethernet backend for the DaynaPORT: `slirp[,hostfwd=tcp:[HOSTIP]:HOSTPORT-GUESTIP:GUESTPORT]` `hub:HOST:PORT[,key=FILE]` (join an [ethhub](docs/features/ETHHUB.md) LAN over UDP) or `none`. Default `slirp`, but `none` (cable out) with `--headless` or `--dbg-script` so scripted runs stay repeatable; forwards listen on 127.0.0.1 unless HOSTIP is given |
 | `--eth-mac=MAC` | DaynaPORT MAC address (default `02:6d:78:76:6d:01`; random `02:6d:78:xx:xx:xx` on a hub) |
 | `--eth-latency=D` | Minimum delay of received frames on the emulated clock: `10ms` (default), `500us`, `1s`, `0` = off. Needed because slirp answers before the guest's send has returned (MacTCP Ping) |
 | `--debugger` | Start paused at first instruction with `(dbg)` prompt |

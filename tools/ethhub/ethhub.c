@@ -12,14 +12,28 @@
  * after --client-timeout seconds, MAC entries after --mac-timeout seconds.
  * Optional Linux-only TAP port (--tap) puts a local IP stack on the LAN.
  *
- * Security: ANY datagram from ANY source that reaches the socket makes that
- * source a client, and broadcasts are flooded to every client.  A hub that
- * listens beyond loopback can therefore be used for UDP reflection and
- * amplification (spoofed sources) and lets anyone on the network read the
- * LAN's broadcast traffic and take over MACs.  So the default listen address
- * is 127.0.0.1; anything wider needs an explicit --listen ADDR:PORT, prints a
- * warning, and should be limited with --allow CIDR.  There is no
- * authentication and no rate limit: do not expose the hub to the internet.
+ * Hardening (docs/features/ETHHUB.md, docs/FINDINGS.md F43..F46):
+ *   - client and MAC tables are chained hash tables with an LRU list: O(1)
+ *     lookup, O(1) eviction, ageing cost proportional to what expires;
+ *   - a MAC owned by a live client cannot be taken over by another client
+ *     (--mac-move=deny, the default), see mac_move_denied();
+ *   - per-client token buckets (frames/s, bytes/s) and a cap on the bytes a
+ *     client can make the hub flood (broadcast amplification);
+ *   - a full client table evicts an idle client instead of refusing a new one,
+ *     and one source IP can only hold --max-per-ip clients;
+ *   - optional shared-secret authentication (--key-file): a keyed hello
+ *     replaces the empty hello; datagrams from addresses that have not sent
+ *     one are dropped.  Without a key nothing changes on the wire.
+ *
+ * Security: without --key-file ANY datagram from ANY source that reaches the
+ * socket makes that source a client, and broadcasts are flooded to every
+ * client.  A hub that listens beyond loopback can therefore be used for UDP
+ * reflection and lets anyone on the network read the LAN's broadcast traffic.
+ * So the default listen address is 127.0.0.1; anything wider needs an explicit
+ * --listen ADDR:PORT, prints a warning, and should be limited with --allow
+ * CIDR and --key-file.  The key stops casual LAN abuse, not an attacker who
+ * can read or spoof the client's traffic, and nothing is encrypted: do not
+ * expose the hub to the internet.
  *
  * Plain C11 + POSIX sockets, no dependencies.
  *
@@ -42,6 +56,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
@@ -62,18 +77,50 @@
 #define DEF_PORT 5555
 #define DEF_CLIENT_TIMEOUT 60
 #define DEF_MAC_TIMEOUT 300
+#define DEF_LIVE_WINDOW 15 /* three 5 s keepalives */
 #define DEF_MAX_CLIENTS 64
 #define DEF_MAX_MACS 1024
+#define DEF_MAX_PER_IP 16
 #define HARD_MAX_CLIENTS 4096
-#define HARD_MAX_MACS 4096 /* lookups are linear scans, twice per frame */
+#define HARD_MAX_MACS 4096
 #define MAX_ALLOW 16
+
+#define DEF_RATE_FPS 10000
+#define DEF_RATE_BPS 12500000 /* 100 Mbit/s */
+#define DEF_FLOOD_BPS 2000000 /* egress bytes/s one client may cause by flooding */
+#define GLOBAL_FLOOD_MULT 4   /* the whole hub: this many times the per-client rate */
+
+/* Keyed hello: 13 bytes (inside the 1..13 range no Ethernet frame can use, so it
+ * can never be mistaken for a frame): magic, uint32 BE unix seconds, then the
+ * first 8 bytes of HMAC-SHA256(key, "ethhub-hello-v1" || magic || seconds). */
+#define AUTH_MAGIC 0xE7
+#define AUTH_HELLO_LEN 13
+#define AUTH_TAG_LEN 8
+#define AUTH_CTX "ethhub-hello-v1"
+#define DEF_AUTH_WINDOW 60
+#define KEY_MIN 16
+#define KEY_MAX 1024
+
+typedef struct {
+    double tok;
+    int64_t t_ns;
+} Bucket;
+
+typedef struct {
+    int prev, next;
+} Link;
+
+typedef struct {
+    int head, tail;
+} Lru;
 
 typedef struct {
     bool used;
     bool is_tap;
-    bool pinned; /* TAP / uplink: never ages out */
+    bool pinned; /* TAP / uplink: never ages out, not in the LRU list */
     struct sockaddr_in addr;
     time_t last_seen;
+    Bucket frames, bytes, flood;
 } Client;
 
 typedef struct {
@@ -88,6 +135,8 @@ typedef struct {
     uint64_t hellos, dropped_short, dropped_long, dropped_full, dropped_denied;
     uint64_t unicast, flooded, unknown_unicast, send_errors;
     uint64_t clients_added, clients_expired, macs_learned, macs_evicted, macs_expired;
+    uint64_t dropped_unauth, dropped_rate, dropped_flood, dropped_macmove, dropped_ip_cap;
+    uint64_t clients_evicted;
 } Stats;
 
 typedef struct {
@@ -96,15 +145,40 @@ typedef struct {
 
 static AllowNet g_allow[MAX_ALLOW];
 static int g_nallow;
-static Client *g_clients;
-static MacEntry *g_macs;
 static int g_max_clients = DEF_MAX_CLIENTS;
 static int g_max_macs = DEF_MAX_MACS;
+static int g_max_per_ip = DEF_MAX_PER_IP; /* 0 = unlimited */
 static int g_client_timeout = DEF_CLIENT_TIMEOUT;
 static int g_mac_timeout = DEF_MAC_TIMEOUT;
+static int g_live_window = DEF_LIVE_WINDOW;
+static bool g_mac_move_allow; /* --mac-move=allow */
+
+static bool g_rate_on = true;
+static double g_rate_fps = DEF_RATE_FPS, g_rate_bps = DEF_RATE_BPS, g_flood_bps = DEF_FLOOD_BPS;
+static double g_burst_f, g_burst_b, g_burst_flood; /* derived by rate_setup() */
+static Bucket g_gflood;
+static int g_opt_flood = DEF_FLOOD_BPS; /* --flood-rate, bytes/s */
+
+static uint8_t g_key[KEY_MAX + 1];
+static size_t g_key_len; /* 0 = no authentication */
+static int g_auth_window = DEF_AUTH_WINDOW;
+
+static Client *g_clients;
+static MacEntry *g_macs;
+static Link *g_clru, *g_mlru;
+static Lru g_clist = {-1, -1}, g_mlist = {-1, -1};
+static int *g_chnext, *g_mhnext; /* hash chain links */
+static int *g_cbuck, *g_mbuck;   /* hash buckets (-1 = empty) */
+static uint32_t g_cmask, g_mmask;
+static int *g_cfree, *g_mfree; /* free slot stacks */
+static int g_ncfree, g_nmfree;
+static uint32_t g_seed;
+static uint8_t g_buf[BUF_SIZE]; /* receive buffer */
+
 static int g_sock = -1;
 static int g_tap_fd = -1;
 static int g_tap_slot = -1;
+static int g_uplink = -1;
 static bool g_verbose;
 static FILE *g_pcap;
 static Stats g_st;
@@ -115,6 +189,13 @@ static time_t now_s(void)
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return ts.tv_sec;
+}
+
+static int64_t now_ns(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000000000LL + ts.tv_nsec;
 }
 
 static void fmt_mac(const uint8_t *m, char *out)
@@ -163,60 +244,354 @@ static void pcap_write(const uint8_t *f, size_t len)
     fflush(g_pcap);
 }
 
-/* ---- client table ---------------------------------------------------- */
+/* ---- SHA-256 / HMAC-SHA256 (FIPS 180-4, RFC 2104) -------------------------- */
 
-static int client_find(const struct sockaddr_in *a)
+typedef struct {
+    uint32_t h[8];
+    uint8_t buf[64];
+    uint64_t len;
+    size_t fill;
+} Sha256;
+
+static const uint32_t K256[64] = {
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2};
+
+#define ROR32(x, n) (((x) >> (n)) | ((x) << (32 - (n))))
+
+static void sha256_block(Sha256 *s, const uint8_t *p)
 {
-    for (int i = 0; i < g_max_clients; i++) {
-        const Client *c = &g_clients[i];
-        if (c->used && !c->is_tap && c->addr.sin_addr.s_addr == a->sin_addr.s_addr &&
-            c->addr.sin_port == a->sin_port)
-            return i;
+    uint32_t w[64];
+    for (size_t i = 0; i < 16; i++) {
+        const uint8_t *q = p + 4 * i;
+        w[i] = (uint32_t)q[0] << 24 | (uint32_t)q[1] << 16 | (uint32_t)q[2] << 8 | (uint32_t)q[3];
     }
+    for (int i = 16; i < 64; i++) {
+        uint32_t s0 = ROR32(w[i - 15], 7) ^ ROR32(w[i - 15], 18) ^ (w[i - 15] >> 3);
+        uint32_t s1 = ROR32(w[i - 2], 17) ^ ROR32(w[i - 2], 19) ^ (w[i - 2] >> 10);
+        w[i] = w[i - 16] + s0 + w[i - 7] + s1;
+    }
+    uint32_t a = s->h[0], b = s->h[1], c = s->h[2], d = s->h[3], e = s->h[4], f = s->h[5], g = s->h[6],
+             h = s->h[7];
+    for (int i = 0; i < 64; i++) {
+        uint32_t t1 = h + (ROR32(e, 6) ^ ROR32(e, 11) ^ ROR32(e, 25)) + ((e & f) ^ (~e & g)) + K256[i] + w[i];
+        uint32_t t2 = (ROR32(a, 2) ^ ROR32(a, 13) ^ ROR32(a, 22)) + ((a & b) ^ (a & c) ^ (b & c));
+        h = g;
+        g = f;
+        f = e;
+        e = d + t1;
+        d = c;
+        c = b;
+        b = a;
+        a = t1 + t2;
+    }
+    s->h[0] += a;
+    s->h[1] += b;
+    s->h[2] += c;
+    s->h[3] += d;
+    s->h[4] += e;
+    s->h[5] += f;
+    s->h[6] += g;
+    s->h[7] += h;
+}
+
+static void sha256_init(Sha256 *s)
+{
+    static const uint32_t iv[8] = {0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+                                   0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
+    memcpy(s->h, iv, sizeof iv);
+    s->len = 0;
+    s->fill = 0;
+}
+
+static void sha256_update(Sha256 *s, const uint8_t *p, size_t n)
+{
+    s->len += n;
+    while (n > 0) {
+        size_t k = 64 - s->fill < n ? 64 - s->fill : n;
+        memcpy(s->buf + s->fill, p, k);
+        s->fill += k;
+        p += k;
+        n -= k;
+        if (s->fill == 64) {
+            sha256_block(s, s->buf);
+            s->fill = 0;
+        }
+    }
+}
+
+static void sha256_final(Sha256 *s, uint8_t out[32])
+{
+    uint64_t bits = s->len * 8;
+    uint8_t pad = 0x80;
+    sha256_update(s, &pad, 1);
+    pad = 0;
+    while (s->fill != 56)
+        sha256_update(s, &pad, 1);
+    uint8_t lb[8];
+    for (int i = 0; i < 8; i++)
+        lb[i] = (uint8_t)(bits >> (56 - 8 * i));
+    sha256_update(s, lb, 8);
+    for (size_t i = 0; i < 8; i++) {
+        uint8_t *q = out + 4 * i;
+        q[0] = (uint8_t)(s->h[i] >> 24);
+        q[1] = (uint8_t)(s->h[i] >> 16);
+        q[2] = (uint8_t)(s->h[i] >> 8);
+        q[3] = (uint8_t)s->h[i];
+    }
+}
+
+static void hmac_sha256(const uint8_t *key, size_t klen, const uint8_t *msg, size_t mlen, uint8_t out[32])
+{
+    uint8_t k[64] = {0}, ipad[64], opad[64], inner[32];
+    if (klen > 64) {
+        Sha256 s;
+        sha256_init(&s);
+        sha256_update(&s, key, klen);
+        sha256_final(&s, k);
+    } else {
+        memcpy(k, key, klen);
+    }
+    for (int i = 0; i < 64; i++) {
+        ipad[i] = k[i] ^ 0x36;
+        opad[i] = k[i] ^ 0x5c;
+    }
+    Sha256 s;
+    sha256_init(&s);
+    sha256_update(&s, ipad, 64);
+    sha256_update(&s, msg, mlen);
+    sha256_final(&s, inner);
+    sha256_init(&s);
+    sha256_update(&s, opad, 64);
+    sha256_update(&s, inner, 32);
+    sha256_final(&s, out);
+}
+
+/* ---- authentication (keyed hello) ------------------------------------------ */
+
+static void auth_tag(const uint8_t hdr[5], uint8_t tag[AUTH_TAG_LEN])
+{
+    uint8_t msg[sizeof AUTH_CTX - 1 + 5], full[32];
+    memcpy(msg, AUTH_CTX, sizeof AUTH_CTX - 1);
+    memcpy(msg + sizeof AUTH_CTX - 1, hdr, 5);
+    hmac_sha256(g_key, g_key_len, msg, sizeof msg, full);
+    memcpy(tag, full, AUTH_TAG_LEN);
+}
+
+static void auth_hello_make(uint8_t out[AUTH_HELLO_LEN])
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    uint32_t t = (uint32_t)ts.tv_sec;
+    out[0] = AUTH_MAGIC;
+    out[1] = (uint8_t)(t >> 24);
+    out[2] = (uint8_t)(t >> 16);
+    out[3] = (uint8_t)(t >> 8);
+    out[4] = (uint8_t)t;
+    auth_tag(out, out + 5);
+}
+
+static bool auth_hello_ok(const uint8_t *p)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    int64_t t = (int64_t)((uint32_t)p[1] << 24 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 8 | p[4]);
+    int64_t d = (int64_t)(uint32_t)ts.tv_sec - t; /* 32-bit seconds: fine until 2106 */
+    if (d < -g_auth_window || d > g_auth_window)
+        return false;
+    uint8_t tag[AUTH_TAG_LEN];
+    auth_tag(p, tag);
+    uint8_t diff = 0;
+    for (int i = 0; i < AUTH_TAG_LEN; i++)
+        diff |= (uint8_t)(tag[i] ^ p[5 + i]);
+    return diff == 0;
+}
+
+static bool is_auth_hello_shape(const uint8_t *p, ssize_t n)
+{
+    return n == AUTH_HELLO_LEN && p[0] == AUTH_MAGIC;
+}
+
+/* The key file must be private to its owner (like an ssh key): the secret is
+ * all there is, so refuse to run with one that others can read. */
+static int load_key(const char *path)
+{
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) {
+        perror(path);
+        return -1;
+    }
+    struct stat st;
+    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) {
+        fprintf(stderr, "--key-file %s: not a regular file\n", path);
+        close(fd);
+        return -1;
+    }
+    if (st.st_mode & 077) {
+        fprintf(stderr, "--key-file %s: permissions %04o are too open (group/other can access it); chmod 600\n",
+                path, (unsigned)(st.st_mode & 0777));
+        close(fd);
+        return -1;
+    }
+    ssize_t n = read(fd, g_key, sizeof g_key);
+    close(fd);
+    if (n < 0) {
+        perror(path);
+        return -1;
+    }
+    size_t len = (size_t)n;
+    if (len > KEY_MAX) {
+        fprintf(stderr, "--key-file %s: longer than %d bytes\n", path, KEY_MAX);
+        return -1;
+    }
+    while (len > 0 && (g_key[len - 1] == '\n' || g_key[len - 1] == '\r'))
+        len--;
+    if (len < KEY_MIN) {
+        fprintf(stderr, "--key-file %s: key is %zu bytes, need at least %d\n", path, len, KEY_MIN);
+        return -1;
+    }
+    g_key_len = len;
+    return 0;
+}
+
+/* ---- hashing, LRU lists ---------------------------------------------------- */
+
+static uint32_t hash_bytes(const uint8_t *p, size_t n)
+{
+    uint32_t h = 2166136261u ^ g_seed;
+    for (size_t i = 0; i < n; i++)
+        h = (h ^ p[i]) * 16777619u;
+    h ^= h >> 15;
+    h *= 0x2c1b3c6du;
+    h ^= h >> 12;
+    return h;
+}
+
+static void seed_init(void)
+{
+    uint32_t s = 0;
+    FILE *f = fopen("/dev/urandom", "rb");
+    if (!f || fread(&s, sizeof s, 1, f) != 1) {
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        s = (uint32_t)ts.tv_nsec ^ (uint32_t)getpid() * 2654435761u;
+    }
+    if (f)
+        fclose(f);
+    g_seed = s;
+}
+
+static uint32_t pow2_buckets(int n)
+{
+    uint32_t b = 16;
+    while (b < (uint32_t)n * 2)
+        b <<= 1;
+    return b;
+}
+
+static void lru_unlink(Link *l, Lru *h, int i)
+{
+    if (l[i].prev >= 0)
+        l[l[i].prev].next = l[i].next;
+    else
+        h->head = l[i].next;
+    if (l[i].next >= 0)
+        l[l[i].next].prev = l[i].prev;
+    else
+        h->tail = l[i].prev;
+}
+
+static void lru_push_front(Link *l, Lru *h, int i)
+{
+    l[i].prev = -1;
+    l[i].next = h->head;
+    if (h->head >= 0)
+        l[h->head].prev = i;
+    h->head = i;
+    if (h->tail < 0)
+        h->tail = i;
+}
+
+static void lru_touch(Link *l, Lru *h, int i)
+{
+    if (h->head != i) {
+        lru_unlink(l, h, i);
+        lru_push_front(l, h, i);
+    }
+}
+
+static void bucket_init(Bucket *b, double burst, int64_t t)
+{
+    b->tok = burst;
+    b->t_ns = t;
+}
+
+/* Refill by elapsed time, then take `cost` if available. */
+static bool bucket_take(Bucket *b, double rate, double burst, double cost, int64_t t)
+{
+    double dt = (double)(t - b->t_ns) / 1e9;
+    if (dt < 0)
+        dt = 0;
+    b->t_ns = t;
+    b->tok += dt * rate;
+    if (b->tok > burst)
+        b->tok = burst;
+    if (b->tok < cost)
+        return false;
+    b->tok -= cost;
+    return true;
+}
+
+static void rate_setup(void)
+{
+    g_flood_bps = g_opt_flood;
+    g_burst_f = g_rate_fps / 4 < 8 ? 8 : g_rate_fps / 4;
+    g_burst_b = g_rate_bps / 4 < FRAME_MAX ? FRAME_MAX : g_rate_bps / 4;
+    g_burst_flood = g_flood_bps / 2 < FRAME_MAX ? FRAME_MAX : g_flood_bps / 2;
+    bucket_init(&g_gflood, g_burst_flood * GLOBAL_FLOOD_MULT, now_ns());
+}
+
+/* ---- MAC table ------------------------------------------------------------- */
+
+static int mac_find(const uint8_t *mac)
+{
+    for (int i = g_mbuck[hash_bytes(mac, 6) & g_mmask]; i >= 0; i = g_mhnext[i])
+        if (memcmp(g_macs[i].mac, mac, 6) == 0)
+            return i;
     return -1;
+}
+
+static void mac_release(int i)
+{
+    int *pp = &g_mbuck[hash_bytes(g_macs[i].mac, 6) & g_mmask];
+    while (*pp != i)
+        pp = &g_mhnext[*pp];
+    *pp = g_mhnext[i];
+    lru_unlink(g_mlru, &g_mlist, i);
+    g_macs[i].used = false;
+    g_mfree[g_nmfree++] = i;
 }
 
 static void macs_purge_client(int idx)
 {
     for (int i = 0; i < g_max_macs; i++)
         if (g_macs[i].used && g_macs[i].client == idx)
-            g_macs[i].used = false;
+            mac_release(i);
 }
 
-/* Find or create; -1 if table full. */
-static int client_touch(const struct sockaddr_in *a, time_t now)
+static int mac_alloc(void)
 {
-    int idx = client_find(a);
-    if (idx >= 0) {
-        g_clients[idx].last_seen = now;
-        return idx;
+    if (g_nmfree == 0) {
+        mac_release(g_mlist.tail); /* table full: evict the least recently seen */
+        g_st.macs_evicted++;
     }
-    for (int i = 0; i < g_max_clients; i++) {
-        if (!g_clients[i].used) {
-            g_clients[i].used = true;
-            g_clients[i].is_tap = false;
-            g_clients[i].addr = *a;
-            g_clients[i].last_seen = now;
-            g_st.clients_added++;
-            if (g_verbose) {
-                char s[64];
-                fmt_client(&g_clients[i], s, sizeof s);
-                fprintf(stderr, "client + %s\n", s);
-            }
-            return i;
-        }
-    }
-    return -1;
-}
-
-/* ---- MAC table ------------------------------------------------------- */
-
-static int mac_find(const uint8_t *mac)
-{
-    for (int i = 0; i < g_max_macs; i++)
-        if (g_macs[i].used && memcmp(g_macs[i].mac, mac, 6) == 0)
-            return i;
-    return -1;
+    return g_mfree[--g_nmfree];
 }
 
 static void mac_learn(const uint8_t *mac, int client, time_t now)
@@ -225,52 +600,181 @@ static void mac_learn(const uint8_t *mac, int client, time_t now)
         return;
     int i = mac_find(mac);
     if (i < 0) {
-        int victim = -1;
-        for (int k = 0; k < g_max_macs; k++) {
-            if (!g_macs[k].used) {
-                victim = k;
-                break;
-            }
-            if (victim < 0 || g_macs[k].last_seen < g_macs[victim].last_seen)
-                victim = k;
-        }
-        if (g_macs[victim].used)
-            g_st.macs_evicted++; /* table full: evict least recently seen */
-        i = victim;
+        i = mac_alloc();
         memcpy(g_macs[i].mac, mac, 6);
         g_macs[i].used = true;
+        uint32_t b = hash_bytes(mac, 6) & g_mmask;
+        g_mhnext[i] = g_mbuck[b];
+        g_mbuck[b] = i;
+        lru_push_front(g_mlru, &g_mlist, i);
         g_st.macs_learned++;
+    } else {
+        lru_touch(g_mlru, &g_mlist, i);
     }
     g_macs[i].client = client;
     g_macs[i].last_seen = now;
 }
 
-/* ---- ageing ---------------------------------------------------------- */
+/* A MAC learned on a live client cannot move to another client.  "Live" means
+ * the owner sent any datagram (a frame or a keepalive hello) within
+ * --live-window seconds; for the TAP and the uplink, which carry many MACs and
+ * are always there, the entry itself must have been refreshed that recently.
+ * A guest that restarts on a new UDP port is therefore locked out for at most
+ * the live window after its old process stopped; an attacker is locked out for
+ * as long as the owner is up. */
+static bool mac_move_denied(const uint8_t *src, int from, time_t now)
+{
+    if (g_mac_move_allow || (src[0] & 1))
+        return false;
+    int m = mac_find(src);
+    if (m < 0)
+        return false;
+    int owner = g_macs[m].client;
+    if (owner == from || !g_clients[owner].used)
+        return false;
+    const Client *o = &g_clients[owner];
+    time_t seen = o->pinned ? g_macs[m].last_seen : o->last_seen;
+    return now - seen < g_live_window;
+}
 
+/* ---- client table ---------------------------------------------------------- */
+
+static void client_key(const struct sockaddr_in *a, uint8_t k[6])
+{
+    memcpy(k, &a->sin_addr.s_addr, 4);
+    memcpy(k + 4, &a->sin_port, 2);
+}
+
+static uint32_t client_bucket(const struct sockaddr_in *a)
+{
+    uint8_t k[6];
+    client_key(a, k);
+    return hash_bytes(k, 6) & g_cmask;
+}
+
+static int client_find(const struct sockaddr_in *a)
+{
+    for (int i = g_cbuck[client_bucket(a)]; i >= 0; i = g_chnext[i]) {
+        const Client *c = &g_clients[i];
+        if (c->addr.sin_addr.s_addr == a->sin_addr.s_addr && c->addr.sin_port == a->sin_port)
+            return i;
+    }
+    return -1;
+}
+
+static void client_release(int i)
+{
+    Client *c = &g_clients[i];
+    macs_purge_client(i);
+    if (!c->is_tap) {
+        int *pp = &g_cbuck[client_bucket(&c->addr)];
+        while (*pp != i)
+            pp = &g_chnext[*pp];
+        *pp = g_chnext[i];
+    }
+    if (!c->pinned)
+        lru_unlink(g_clru, &g_clist, i);
+    c->used = false;
+    g_cfree[g_ncfree++] = i;
+}
+
+/* Take a free slot; the caller has checked there is one. */
+static int client_new(const struct sockaddr_in *a, bool is_tap, bool pinned, time_t now)
+{
+    int i = g_cfree[--g_ncfree];
+    Client *c = &g_clients[i];
+    memset(c, 0, sizeof *c);
+    c->used = true;
+    c->is_tap = is_tap;
+    c->pinned = pinned;
+    c->last_seen = now;
+    if (a)
+        c->addr = *a;
+    int64_t t = now_ns();
+    bucket_init(&c->frames, g_burst_f, t);
+    bucket_init(&c->bytes, g_burst_b, t);
+    bucket_init(&c->flood, g_burst_flood, t);
+    if (!is_tap) {
+        uint32_t b = client_bucket(&c->addr);
+        g_chnext[i] = g_cbuck[b];
+        g_cbuck[b] = i;
+    }
+    if (!pinned)
+        lru_push_front(g_clru, &g_clist, i);
+    return i;
+}
+
+static int clients_from_ip(const struct sockaddr_in *a)
+{
+    int n = 0;
+    for (int i = 0; i < g_max_clients; i++)
+        if (g_clients[i].used && !g_clients[i].is_tap &&
+            g_clients[i].addr.sin_addr.s_addr == a->sin_addr.s_addr)
+            n++;
+    return n;
+}
+
+#define CLIENT_FULL (-1)
+#define CLIENT_IP_CAP (-2)
+
+/* Find or create.  A full table evicts the least recently seen client, but only
+ * one that has been idle for the live window: a client that keeps its hellos
+ * going is never pushed out by newcomers.  Otherwise CLIENT_FULL. */
+static int client_touch(const struct sockaddr_in *a, time_t now)
+{
+    int idx = client_find(a);
+    if (idx >= 0) {
+        g_clients[idx].last_seen = now;
+        if (!g_clients[idx].pinned)
+            lru_touch(g_clru, &g_clist, idx);
+        return idx;
+    }
+    if (g_max_per_ip > 0 && clients_from_ip(a) >= g_max_per_ip)
+        return CLIENT_IP_CAP;
+    if (g_ncfree == 0) {
+        int v = g_clist.tail;
+        if (v < 0 || now - g_clients[v].last_seen < g_live_window)
+            return CLIENT_FULL;
+        if (g_verbose) {
+            char s[64];
+            fmt_client(&g_clients[v], s, sizeof s);
+            fprintf(stderr, "client - %s (evicted, idle)\n", s);
+        }
+        client_release(v);
+        g_st.clients_evicted++;
+    }
+    idx = client_new(a, false, false, now);
+    g_st.clients_added++;
+    if (g_verbose) {
+        char s[64];
+        fmt_client(&g_clients[idx], s, sizeof s);
+        fprintf(stderr, "client + %s\n", s);
+    }
+    return idx;
+}
+
+/* ---- ageing ---------------------------------------------------------------- */
+
+/* Both lists are ordered by last_seen, so ageing stops at the first live entry. */
 static void age(time_t now)
 {
-    for (int i = 0; i < g_max_clients; i++) {
-        Client *c = &g_clients[i];
-        if (c->used && !c->pinned && now - c->last_seen >= g_client_timeout) {
-            if (g_verbose) {
-                char s[64];
-                fmt_client(c, s, sizeof s);
-                fprintf(stderr, "client - %s (timeout)\n", s);
-            }
-            macs_purge_client(i);
-            c->used = false;
-            g_st.clients_expired++;
+    while (g_clist.tail >= 0 && now - g_clients[g_clist.tail].last_seen >= g_client_timeout) {
+        int i = g_clist.tail;
+        if (g_verbose) {
+            char s[64];
+            fmt_client(&g_clients[i], s, sizeof s);
+            fprintf(stderr, "client - %s (timeout)\n", s);
         }
+        client_release(i);
+        g_st.clients_expired++;
     }
-    for (int i = 0; i < g_max_macs; i++) {
-        if (g_macs[i].used && now - g_macs[i].last_seen >= g_mac_timeout) {
-            g_macs[i].used = false;
-            g_st.macs_expired++;
-        }
+    while (g_mlist.tail >= 0 && now - g_macs[g_mlist.tail].last_seen >= g_mac_timeout) {
+        mac_release(g_mlist.tail);
+        g_st.macs_expired++;
     }
 }
 
-/* ---- forwarding ------------------------------------------------------ */
+/* ---- forwarding ------------------------------------------------------------ */
 
 static void send_to(int idx, const uint8_t *f, size_t len)
 {
@@ -288,11 +792,68 @@ static void send_to(int idx, const uint8_t *f, size_t len)
     }
 }
 
+/* Per-client frame and byte budget for a datagram of `len` bytes. */
+static bool rate_admit(int idx, size_t len)
+{
+    if (!g_rate_on)
+        return true;
+    Client *c = &g_clients[idx];
+    int64_t t = now_ns();
+    return bucket_take(&c->frames, g_rate_fps, g_burst_f, 1, t) &&
+           bucket_take(&c->bytes, g_rate_bps, g_burst_b, (double)len, t);
+}
+
+/* Charge a flood (len bytes to `copies` ports) to the sender and to the hub as a
+ * whole.  The cost is capped at the bucket depth so a big fan-out of a legit
+ * frame is delayed, never impossible. */
+static bool flood_admit(int from, size_t len, int copies)
+{
+    if (!g_rate_on || g_flood_bps <= 0)
+        return true;
+    double cost = (double)len * (double)copies;
+    double cc = cost > g_burst_flood ? g_burst_flood : cost;
+    double gc = cost > g_burst_flood * GLOBAL_FLOOD_MULT ? g_burst_flood * GLOBAL_FLOOD_MULT : cost;
+    int64_t t = now_ns();
+    Bucket *own = &g_clients[from].flood;
+    /* check both before charging either */
+    Bucket own_try = *own, glob_try = g_gflood;
+    if (!bucket_take(&own_try, g_flood_bps, g_burst_flood, cc, t) ||
+        !bucket_take(&glob_try, g_flood_bps * GLOBAL_FLOOD_MULT, g_burst_flood * GLOBAL_FLOOD_MULT, gc, t))
+        return false;
+    *own = own_try;
+    g_gflood = glob_try;
+    return true;
+}
+
+static void flood(int from, const uint8_t *f, size_t len)
+{
+    int copies = 0;
+    for (int i = 0; i < g_max_clients; i++)
+        if (g_clients[i].used && i != from)
+            copies++;
+    if (!flood_admit(from, len, copies)) {
+        g_st.dropped_flood++;
+        return;
+    }
+    for (int i = 0; i < g_max_clients; i++)
+        if (g_clients[i].used && i != from)
+            send_to(i, f, len);
+}
+
 static void forward(int from, const uint8_t *f, size_t len, time_t now)
 {
     g_st.rx_frames++;
     g_st.rx_bytes += len;
     pcap_write(f, len);
+    if (mac_move_denied(f + 6, from, now)) {
+        g_st.dropped_macmove++;
+        if (g_verbose) {
+            char s[18];
+            fmt_mac(f + 6, s);
+            fprintf(stderr, "frame from %s dropped: MAC owned by a live client\n", s);
+        }
+        return;
+    }
     mac_learn(f + 6, from, now);
 
     const uint8_t *dst = f;
@@ -319,9 +880,7 @@ static void forward(int from, const uint8_t *f, size_t len, time_t now)
         g_st.flooded++;
     else
         g_st.unknown_unicast++;
-    for (int i = 0; i < g_max_clients; i++)
-        if (g_clients[i].used && i != from)
-            send_to(i, f, len);
+    flood(from, f, len);
 }
 
 /* No --allow means everybody the socket can hear. */
@@ -360,6 +919,28 @@ static bool parse_cidr(const char *s, AllowNet *out)
     return true;
 }
 
+/* Which client does this datagram belong to?  >= 0 a client; < 0 dropped and
+ * counted.  Without a key any source may join; with one only a keyed hello can
+ * create a client, anything else must come from a known address. */
+static int admit_source(const struct sockaddr_in *from, const uint8_t *buf, ssize_t n, time_t now)
+{
+    if (g_key_len == 0)
+        return client_touch(from, now);
+    if (is_auth_hello_shape(buf, n)) {
+        if (!auth_hello_ok(buf)) {
+            g_st.dropped_unauth++;
+            return -3;
+        }
+        return client_touch(from, now);
+    }
+    int idx = client_find(from);
+    if (idx < 0) {
+        g_st.dropped_unauth++;
+        return -3;
+    }
+    return client_touch(from, now);
+}
+
 static void handle_udp(uint8_t *buf)
 {
     struct sockaddr_in from;
@@ -376,17 +957,28 @@ static void handle_udp(uint8_t *buf)
         g_st.dropped_long++;
         return;
     }
-    if (n > 0 && n < FRAME_MIN) {
+    bool keyed_hello = g_key_len && is_auth_hello_shape(buf, n);
+    if (n > 0 && n < FRAME_MIN && !keyed_hello) {
         g_st.dropped_short++;
         return;
     }
-    int idx = client_touch(&from, now);
-    if (idx < 0) {
+    int idx = admit_source(&from, buf, n, now);
+    if (idx == CLIENT_FULL) {
         g_st.dropped_full++;
         return;
     }
-    if (n == 0) {
+    if (idx == CLIENT_IP_CAP) {
+        g_st.dropped_ip_cap++;
+        return;
+    }
+    if (idx < 0)
+        return;
+    if (n == 0 || keyed_hello) {
         g_st.hellos++;
+        return;
+    }
+    if (!rate_admit(idx, (size_t)n)) {
+        g_st.dropped_rate++;
         return;
     }
     forward(idx, buf, (size_t)n, now);
@@ -407,6 +999,10 @@ static void handle_tap(uint8_t *buf)
     }
     time_t now = now_s();
     g_clients[g_tap_slot].last_seen = now;
+    if (!rate_admit(g_tap_slot, (size_t)n)) {
+        g_st.dropped_rate++;
+        return;
+    }
     forward(g_tap_slot, buf, (size_t)n, now);
 }
 
@@ -431,7 +1027,7 @@ static int tap_open(const char *name)
 }
 #endif
 
-/* ---- misc ------------------------------------------------------------ */
+/* ---- misc ------------------------------------------------------------------ */
 
 static void print_stats(FILE *o)
 {
@@ -445,7 +1041,9 @@ static void print_stats(FILE *o)
             "tx_bytes=%llu hellos=%llu dropped_short=%llu dropped_long=%llu dropped_full=%llu "
             "dropped_denied=%llu "
             "unicast=%llu flooded=%llu unknown_unicast=%llu send_errors=%llu clients_added=%llu "
-            "clients_expired=%llu macs_learned=%llu macs_evicted=%llu macs_expired=%llu\n",
+            "clients_expired=%llu macs_learned=%llu macs_evicted=%llu macs_expired=%llu "
+            "dropped_unauth=%llu dropped_rate=%llu dropped_flood=%llu dropped_macmove=%llu "
+            "dropped_ip_cap=%llu clients_evicted=%llu\n",
             nc, nm, (unsigned long long)g_st.rx_frames, (unsigned long long)g_st.rx_bytes,
             (unsigned long long)g_st.tx_frames, (unsigned long long)g_st.tx_bytes,
             (unsigned long long)g_st.hellos, (unsigned long long)g_st.dropped_short,
@@ -455,11 +1053,12 @@ static void print_stats(FILE *o)
             (unsigned long long)g_st.unknown_unicast, (unsigned long long)g_st.send_errors,
             (unsigned long long)g_st.clients_added, (unsigned long long)g_st.clients_expired,
             (unsigned long long)g_st.macs_learned, (unsigned long long)g_st.macs_evicted,
-            (unsigned long long)g_st.macs_expired);
+            (unsigned long long)g_st.macs_expired, (unsigned long long)g_st.dropped_unauth,
+            (unsigned long long)g_st.dropped_rate, (unsigned long long)g_st.dropped_flood,
+            (unsigned long long)g_st.dropped_macmove, (unsigned long long)g_st.dropped_ip_cap,
+            (unsigned long long)g_st.clients_evicted);
     fflush(o);
 }
-
-static int g_uplink = -1;
 
 /* Register another hub as a pinned client; we hello it periodically. */
 static int uplink_open(const char *spec)
@@ -481,27 +1080,28 @@ static int uplink_open(const char *spec)
         fprintf(stderr, "--connect %s: %s\n", spec, gai_strerror(gr));
         return -1;
     }
-    for (int i = 0; i < g_max_clients; i++) {
-        if (!g_clients[i].used) {
-            g_clients[i].used = true;
-            g_clients[i].pinned = true;
-            g_clients[i].addr = *(struct sockaddr_in *)res->ai_addr;
-            g_clients[i].last_seen = now_s();
-            g_uplink = i;
-            freeaddrinfo(res);
-            return 0;
-        }
+    if (g_ncfree == 0) {
+        freeaddrinfo(res);
+        fprintf(stderr, "no free client slot for uplink\n");
+        return -1;
     }
+    g_uplink = client_new((struct sockaddr_in *)res->ai_addr, false, true, now_s());
     freeaddrinfo(res);
-    fprintf(stderr, "no free client slot for uplink\n");
-    return -1;
+    return 0;
 }
 
 static void uplink_hello(void)
 {
-    if (g_uplink >= 0)
-        sendto(g_sock, "", 0, 0, (const struct sockaddr *)&g_clients[g_uplink].addr,
-               sizeof g_clients[g_uplink].addr);
+    if (g_uplink < 0)
+        return;
+    uint8_t h[AUTH_HELLO_LEN] = {0};
+    size_t n = 0;
+    if (g_key_len) {
+        auth_hello_make(h);
+        n = sizeof h;
+    }
+    (void)sendto(g_sock, h, n, 0, (const struct sockaddr *)&g_clients[g_uplink].addr,
+                 sizeof g_clients[g_uplink].addr);
 }
 
 static void on_sig(int s)
@@ -515,12 +1115,15 @@ static void on_sig(int s)
 static void usage(const char *p)
 {
     fprintf(stderr,
-            "usage: %s [options]\n"
+            "usage: %s [options]   (options also as --name=value)\n"
             "  --listen [addr:]port   UDP listen address (default 127.0.0.1:%d).  Anything but\n"
             "                         loopback lets the network join, read broadcasts and\n"
             "                         reflect traffic off the hub: say so explicitly, e.g.\n"
-            "                         --listen 0.0.0.0:%d, and add --allow\n"
+            "                         --listen 0.0.0.0:%d, and add --allow and --key-file\n"
             "  --allow CIDR           accept clients only from CIDR (a.b.c.d[/n]); repeatable\n"
+            "  --key-file FILE        shared secret (%d..%d bytes, mode 0600): only addresses that\n"
+            "                         sent a keyed hello may join; see docs/features/ETHHUB.md\n"
+            "  --auth-window SEC      accepted clock difference of a keyed hello (default %d)\n"
 #if ETHHUB_HAVE_TAP
             "  --tap NAME             attach Linux TAP device NAME as a port\n"
 #endif
@@ -530,13 +1133,23 @@ static void usage(const char *p)
             "  --mac-timeout SEC      forget MACs after SEC (default %d)\n"
             "  --max-clients N        client table size (default %d, max %d)\n"
             "  --max-macs N           MAC table size (default %d, max %d)\n"
+            "  --max-per-ip N         clients per source IP, 0 = no limit (default %d)\n"
+            "  --live-window SEC      a client that sent anything within SEC is live: its MACs\n"
+            "                         are pinned and it is not evicted (default %d)\n"
+            "  --mac-move allow|deny  may a MAC move to another client while its owner is live?\n"
+            "                         (default deny)\n"
+            "  --rate FPS[,BPS]       per-client limit in frames/s and bytes/s (default %d,%d)\n"
+            "  --flood-rate BPS       egress bytes/s one client may cause by broadcast/multicast/\n"
+            "                         unknown-unicast flooding; 0 = no cap (default %d)\n"
+            "  --no-rate              turn off --rate and --flood-rate\n"
             "  --pcap FILE            write all frames received by the hub to a pcap file\n"
             "  --verbose              log clients and frames to stderr\n"
             "Wire format: one raw Ethernet frame (14..1514 bytes) per UDP datagram;\n"
-            "empty datagram = hello/keepalive.  SIGUSR1 prints counters; SIGINT/SIGTERM\n"
-            "prints them and exits.\n",
-            p, DEF_PORT, DEF_PORT, DEF_CLIENT_TIMEOUT, DEF_MAC_TIMEOUT, DEF_MAX_CLIENTS, HARD_MAX_CLIENTS,
-            DEF_MAX_MACS, HARD_MAX_MACS);
+            "empty datagram = hello/keepalive (13-byte keyed hello with --key-file).\n"
+            "SIGUSR1 prints counters; SIGINT/SIGTERM prints them and exits.\n",
+            p, DEF_PORT, DEF_PORT, KEY_MIN, KEY_MAX, DEF_AUTH_WINDOW, DEF_CLIENT_TIMEOUT, DEF_MAC_TIMEOUT,
+            DEF_MAX_CLIENTS, HARD_MAX_CLIENTS, DEF_MAX_MACS, HARD_MAX_MACS, DEF_MAX_PER_IP, DEF_LIVE_WINDOW,
+            DEF_RATE_FPS, DEF_RATE_BPS, DEF_FLOOD_BPS);
 }
 
 static int parse_int(const char *s, int lo, int hi, const char *what)
@@ -550,151 +1163,231 @@ static int parse_int(const char *s, int lo, int hi, const char *what)
     return (int)v;
 }
 
-int main(int argc, char **argv)
+static void parse_rate(const char *s)
 {
-    const char *listen_spec = NULL, *tap_name = NULL, *pcap_path = NULL,
-               *connect_spec = NULL;
+    char buf[64];
+    const char *comma = strchr(s, ',');
+    size_t fl = comma ? (size_t)(comma - s) : strlen(s);
+    if (fl >= sizeof buf) {
+        fprintf(stderr, "bad --rate: %s\n", s);
+        exit(2);
+    }
+    memcpy(buf, s, fl);
+    buf[fl] = '\0';
+    g_rate_fps = parse_int(buf, 1, 100000000, "rate frames/s");
+    if (comma)
+        g_rate_bps = parse_int(comma + 1, 1, 2000000000, "rate bytes/s");
+}
+
+typedef struct {
+    const char *listen_spec, *tap_name, *pcap_path, *connect_spec, *key_path;
+} Opts;
+
+typedef struct {
+    const char *name;
+    int *dst;
+    int lo, hi;
+} IntOpt;
+
+typedef struct {
+    const char *name;
+    const char **dst;
+} StrOpt;
+
+/* Match "--name value" or "--name=value".  On a match sets *v; a missing value
+ * ends the program. */
+static bool opt_val(int argc, char **argv, int *i, const char *name, const char **v)
+{
+    const char *a = argv[*i];
+    size_t nl = strlen(name);
+    if (!a || strncmp(a, name, nl) != 0)
+        return false;
+    if (a[nl] == '=') {
+        *v = a + nl + 1;
+        return true;
+    }
+    if (a[nl] != '\0')
+        return false;
+    if (*i + 1 >= argc) {
+        fprintf(stderr, "%s needs a value\n", name);
+        exit(2);
+    }
+    *v = argv[++*i];
+    return true;
+}
+
+static bool opt_table(int argc, char **argv, int *i, const IntOpt *io, size_t ni, const StrOpt *so, size_t ns)
+{
+    const char *v;
+    for (size_t k = 0; k < ni; k++)
+        if (opt_val(argc, argv, i, io[k].name, &v)) {
+            *io[k].dst = parse_int(v, io[k].lo, io[k].hi, io[k].name + 2);
+            return true;
+        }
+    for (size_t k = 0; k < ns; k++)
+        if (opt_val(argc, argv, i, so[k].name, &v)) {
+            *so[k].dst = v;
+            return true;
+        }
+    return false;
+}
+
+static void parse_mac_move(const char *v)
+{
+    if (!strcmp(v, "allow"))
+        g_mac_move_allow = true;
+    else if (!strcmp(v, "deny"))
+        g_mac_move_allow = false;
+    else {
+        fprintf(stderr, "bad --mac-move: %s (allow or deny)\n", v);
+        exit(2);
+    }
+}
+
+/* Options that are not a plain integer or string. */
+static bool opt_special(int argc, char **argv, int *i)
+{
+    const char *v;
+    if (opt_val(argc, argv, i, "--allow", &v)) {
+        if (g_nallow >= MAX_ALLOW || !parse_cidr(v, &g_allow[g_nallow])) {
+            fprintf(stderr, "bad --allow %s (want a.b.c.d[/n], at most %d)\n", v, MAX_ALLOW);
+            exit(2);
+        }
+        g_nallow++;
+    } else if (opt_val(argc, argv, i, "--mac-move", &v))
+        parse_mac_move(v);
+    else if (opt_val(argc, argv, i, "--rate", &v))
+        parse_rate(v);
+    else if (!strcmp(argv[*i], "--verbose"))
+        g_verbose = true;
+    else if (!strcmp(argv[*i], "--no-rate"))
+        g_rate_on = false;
+    else
+        return false;
+    return true;
+}
+
+static void parse_args(int argc, char **argv, Opts *o)
+{
+    const IntOpt ints[] = {
+        {"--client-timeout", &g_client_timeout, 1, 86400},
+        {"--mac-timeout", &g_mac_timeout, 1, 86400},
+        {"--live-window", &g_live_window, 1, 86400},
+        {"--auth-window", &g_auth_window, 1, 86400},
+        {"--max-clients", &g_max_clients, 1, HARD_MAX_CLIENTS},
+        {"--max-macs", &g_max_macs, 1, HARD_MAX_MACS},
+        {"--max-per-ip", &g_max_per_ip, 0, HARD_MAX_CLIENTS},
+        {"--flood-rate", &g_opt_flood, 0, 2000000000},
+    };
+    const StrOpt strs[] = {
+        {"--listen", &o->listen_spec}, {"--tap", &o->tap_name},   {"--connect", &o->connect_spec},
+        {"--pcap", &o->pcap_path},     {"--key-file", &o->key_path},
+    };
     for (int i = 1; i < argc; i++) {
-        const char *a = argv[i];
-        bool has = i + 1 < argc;
-        if (!strcmp(a, "--listen") && has)
-            listen_spec = argv[++i];
-        else if (!strcmp(a, "--allow") && has) {
-            if (g_nallow >= MAX_ALLOW || !parse_cidr(argv[++i], &g_allow[g_nallow])) {
-                fprintf(stderr, "bad --allow %s (want a.b.c.d[/n], at most %d)\n", argv[i], MAX_ALLOW);
-                return 2;
-            }
-            g_nallow++;
-        } else if (!strcmp(a, "--tap") && has)
-            tap_name = argv[++i];
-        else if (!strcmp(a, "--client-timeout") && has)
-            g_client_timeout = parse_int(argv[++i], 1, 86400, "client-timeout");
-        else if (!strcmp(a, "--mac-timeout") && has)
-            g_mac_timeout = parse_int(argv[++i], 1, 86400, "mac-timeout");
-        else if (!strcmp(a, "--max-clients") && has)
-            g_max_clients = parse_int(argv[++i], 1, HARD_MAX_CLIENTS, "max-clients");
-        else if (!strcmp(a, "--max-macs") && has)
-            g_max_macs = parse_int(argv[++i], 1, HARD_MAX_MACS, "max-macs");
-        else if (!strcmp(a, "--connect") && has)
-            connect_spec = argv[++i];
-        else if (!strcmp(a, "--pcap") && has)
-            pcap_path = argv[++i];
-        else if (!strcmp(a, "--verbose"))
-            g_verbose = true;
-        else {
+        if (opt_table(argc, argv, &i, ints, sizeof ints / sizeof ints[0], strs, sizeof strs / sizeof strs[0]))
+            continue;
+        if (!opt_special(argc, argv, &i)) {
             usage(argv[0]);
-            return 2;
+            exit(2);
         }
     }
+}
 
-    struct sockaddr_in la;
-    memset(&la, 0, sizeof la);
-    la.sin_family = AF_INET;
-    la.sin_addr.s_addr = htonl(0x7F000001u) /* 127.0.0.1 */;
-    la.sin_port = htons(DEF_PORT);
-    if (listen_spec) {
-        char host[128] = "";
-        const char *colon = strrchr(listen_spec, ':');
-        const char *port = listen_spec;
-        if (colon) {
-            size_t hl = (size_t)(colon - listen_spec);
-            if (hl >= sizeof host) {
-                fprintf(stderr, "bad --listen\n");
-                return 2;
-            }
-            memcpy(host, listen_spec, hl);
-            host[hl] = '\0';
-            port = colon + 1;
+static bool parse_listen(const char *listen_spec, struct sockaddr_in *la)
+{
+    char host[128] = "";
+    const char *colon = strrchr(listen_spec, ':');
+    const char *port = listen_spec;
+    if (colon) {
+        size_t hl = (size_t)(colon - listen_spec);
+        if (hl >= sizeof host) {
+            fprintf(stderr, "bad --listen\n");
+            return false;
         }
-        la.sin_port = htons((uint16_t)parse_int(port, 0, 65535, "port"));
-        if (host[0] && inet_pton(AF_INET, host, &la.sin_addr) != 1) {
-            fprintf(stderr, "bad listen address: %s (IPv4 only)\n", host);
-            return 2;
-        }
+        memcpy(host, listen_spec, hl);
+        host[hl] = '\0';
+        port = colon + 1;
     }
+    la->sin_port = htons((uint16_t)parse_int(port, 0, 65535, "port"));
+    if (host[0] && inet_pton(AF_INET, host, &la->sin_addr) != 1) {
+        fprintf(stderr, "bad listen address: %s (IPv4 only)\n", host);
+        return false;
+    }
+    return true;
+}
 
+static bool tables_alloc(void)
+{
     g_clients = calloc((size_t)g_max_clients, sizeof *g_clients);
     g_macs = calloc((size_t)g_max_macs, sizeof *g_macs);
-    uint8_t *buf = malloc(BUF_SIZE);
-    if (!g_clients || !g_macs || !buf) {
-        perror("malloc");
-        return 1;
-    }
+    g_clru = calloc((size_t)g_max_clients, sizeof *g_clru);
+    g_mlru = calloc((size_t)g_max_macs, sizeof *g_mlru);
+    g_chnext = calloc((size_t)g_max_clients, sizeof *g_chnext);
+    g_mhnext = calloc((size_t)g_max_macs, sizeof *g_mhnext);
+    g_cfree = calloc((size_t)g_max_clients, sizeof *g_cfree);
+    g_mfree = calloc((size_t)g_max_macs, sizeof *g_mfree);
+    g_cmask = pow2_buckets(g_max_clients) - 1;
+    g_mmask = pow2_buckets(g_max_macs) - 1;
+    g_cbuck = malloc((size_t)(g_cmask + 1) * sizeof *g_cbuck);
+    g_mbuck = malloc((size_t)(g_mmask + 1) * sizeof *g_mbuck);
+    if (!g_clients || !g_macs || !g_clru || !g_mlru || !g_chnext || !g_mhnext || !g_cfree || !g_mfree ||
+        !g_cbuck || !g_mbuck)
+        return false;
+    memset(g_cbuck, 0xff, (size_t)(g_cmask + 1) * sizeof *g_cbuck); /* all -1 */
+    memset(g_mbuck, 0xff, (size_t)(g_mmask + 1) * sizeof *g_mbuck);
+    for (int i = 0; i < g_max_clients; i++)
+        g_cfree[i] = g_max_clients - 1 - i; /* pop yields slot 0 first */
+    g_ncfree = g_max_clients;
+    for (int i = 0; i < g_max_macs; i++)
+        g_mfree[i] = g_max_macs - 1 - i;
+    g_nmfree = g_max_macs;
+    return true;
+}
 
-    g_sock = socket(AF_INET, SOCK_DGRAM, 0);
-    if (g_sock < 0 || bind(g_sock, (struct sockaddr *)&la, sizeof la) < 0) {
-        perror("bind");
-        return 1;
-    }
-    socklen_t ll = sizeof la;
-    getsockname(g_sock, (struct sockaddr *)&la, &ll);
-    int big = 1 << 20;
-    setsockopt(g_sock, SOL_SOCKET, SO_RCVBUF, &big, sizeof big);
-    setsockopt(g_sock, SOL_SOCKET, SO_SNDBUF, &big, sizeof big);
+static void tables_free(void)
+{
+    free(g_clients);
+    free(g_macs);
+    free(g_clru);
+    free(g_mlru);
+    free(g_chnext);
+    free(g_mhnext);
+    free(g_cfree);
+    free(g_mfree);
+    free(g_cbuck);
+    free(g_mbuck);
+}
 
-    if (tap_name) {
-#if ETHHUB_HAVE_TAP
-        g_tap_fd = tap_open(tap_name);
-        if (g_tap_fd < 0)
-            return 1;
-        g_tap_slot = 0;
-        g_clients[0].used = true;
-        g_clients[0].is_tap = true;
-        g_clients[0].pinned = true;
-        g_clients[0].last_seen = now_s();
-#else
-        fprintf(stderr, "--tap is only supported on Linux\n");
-        return 2;
-#endif
-    }
-    if (connect_spec && uplink_open(connect_spec) < 0)
-        return 2;
-    if (pcap_path)
-        pcap_open(pcap_path);
+static void announce(const struct sockaddr_in *la, const Opts *o)
+{
+    char ip[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &la->sin_addr, ip, sizeof ip);
+    fprintf(stderr, "ethhub: bound to %s:%u\n", ip, ntohs(la->sin_port));
+    if (g_key_len)
+        fprintf(stderr, "ethhub: authentication on (key file %s): unkeyed sources are dropped\n", o->key_path);
+    if ((ntohl(la->sin_addr.s_addr) >> 24) != 127)
+        fprintf(stderr,
+                "ethhub: WARNING: %s is not loopback.  Anyone who can send UDP here %s the\n"
+                "ethhub: LAN, sees its broadcasts and can reflect traffic off the hub.%s\n",
+                ip, g_key_len ? "and knows the key joins" : "joins", g_nallow ? "" : "  Use --allow CIDR.");
+}
 
-    struct sigaction sa;
-    memset(&sa, 0, sizeof sa);
-    sa.sa_handler = on_sig; /* no SA_RESTART: poll() must return */
-    sigaction(SIGINT, &sa, NULL);
-    sigaction(SIGTERM, &sa, NULL);
-    sigaction(SIGUSR1, &sa, NULL);
-    signal(SIGPIPE, SIG_IGN);
-
-    /* Machine-readable line so wrappers/tests can learn an ephemeral port. */
-    {
-        char ip[INET_ADDRSTRLEN];
-        inet_ntop(AF_INET, &la.sin_addr, ip, sizeof ip);
-        fprintf(stderr, "ethhub: bound to %s:%u\n", ip, ntohs(la.sin_port));
-        if ((ntohl(la.sin_addr.s_addr) >> 24) != 127)
-            fprintf(stderr,
-                    "ethhub: WARNING: %s is not loopback.  Anyone who can send UDP here joins the\n"
-                    "ethhub: LAN, sees its broadcasts and can reflect traffic off the hub.%s\n",
-                    ip, g_nallow ? "" : "  Use --allow CIDR.");
-    }
-    printf("ethhub listening on %u\n", ntohs(la.sin_port));
-    fflush(stdout);
-
-    struct pollfd pf[2];
-    pf[0].fd = g_sock;
-    pf[0].events = POLLIN;
-    int npf = 1;
-    if (g_tap_fd >= 0) {
-        pf[1].fd = g_tap_fd;
-        pf[1].events = POLLIN;
-        npf = 2;
-    }
+static void serve(const struct pollfd *pf, int npf, uint8_t *buf)
+{
     time_t last_age = now_s(), last_hello = last_age - 100;
+    struct pollfd p[2];
+    memcpy(p, pf, (size_t)npf * sizeof p[0]);
     while (!g_quit) {
-        int r = poll(pf, (nfds_t)npf, 500);
+        int r = poll(p, (nfds_t)npf, 500);
         if (r > 0) {
-            if (pf[0].revents & POLLIN)
+            if (p[0].revents & POLLIN)
                 for (int k = 0; k < 64; k++) { /* drain a burst per wakeup */
                     struct pollfd p1 = {g_sock, POLLIN, 0};
                     handle_udp(buf);
                     if (poll(&p1, 1, 0) <= 0)
                         break;
                 }
-            if (npf == 2 && (pf[1].revents & POLLIN))
+            if (npf == 2 && (p[1].revents & POLLIN))
                 for (int k = 0; k < 64; k++) {
                     struct pollfd p1 = {g_tap_fd, POLLIN, 0};
                     handle_tap(buf);
@@ -716,12 +1409,111 @@ int main(int argc, char **argv)
             print_stats(stderr);
         }
     }
+}
+
+static int open_tap_port(const char *tap_name)
+{
+#if ETHHUB_HAVE_TAP
+    g_tap_fd = tap_open(tap_name);
+    if (g_tap_fd < 0)
+        return 1;
+    g_tap_slot = client_new(NULL, true, true, now_s());
+    return 0;
+#else
+    (void)tap_name;
+    fprintf(stderr, "--tap is only supported on Linux\n");
+    return 2;
+#endif
+}
+
+static int open_socket(struct sockaddr_in *la)
+{
+    g_sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (g_sock < 0 || bind(g_sock, (struct sockaddr *)la, sizeof *la) < 0) {
+        perror("bind");
+        return -1;
+    }
+    socklen_t ll = sizeof *la;
+    getsockname(g_sock, (struct sockaddr *)la, &ll);
+    int big = 1 << 20;
+    setsockopt(g_sock, SOL_SOCKET, SO_RCVBUF, &big, sizeof big);
+    setsockopt(g_sock, SOL_SOCKET, SO_SNDBUF, &big, sizeof big);
+    return 0;
+}
+
+static int attach_ports(const Opts *o)
+{
+    if (o->tap_name) {
+        int rc = open_tap_port(o->tap_name);
+        if (rc)
+            return rc;
+    }
+    if (o->connect_spec && uplink_open(o->connect_spec) < 0)
+        return 2;
+    if (o->pcap_path)
+        pcap_open(o->pcap_path);
+    return 0;
+}
+
+static void install_signals(void)
+{
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_handler = on_sig; /* no SA_RESTART: poll() must return */
+    sigaction(SIGINT, &sa, NULL);
+    sigaction(SIGTERM, &sa, NULL);
+    sigaction(SIGUSR1, &sa, NULL);
+    signal(SIGPIPE, SIG_IGN);
+}
+
+int main(int argc, char **argv)
+{
+    Opts o;
+    memset(&o, 0, sizeof o);
+    parse_args(argc, argv, &o);
+
+    struct sockaddr_in la;
+    memset(&la, 0, sizeof la);
+    la.sin_family = AF_INET;
+    la.sin_addr.s_addr = htonl(0x7F000001u) /* 127.0.0.1 */;
+    la.sin_port = htons(DEF_PORT);
+    if (o.listen_spec && !parse_listen(o.listen_spec, &la))
+        return 2;
+    if (o.key_path && load_key(o.key_path) < 0)
+        return 2;
+
+    seed_init();
+    rate_setup();
+    if (!tables_alloc()) {
+        perror("malloc");
+        return 1;
+    }
+    if (open_socket(&la) < 0)
+        return 1;
+    int rc = attach_ports(&o);
+    if (rc)
+        return rc;
+    install_signals();
+
+    /* Machine-readable line so wrappers/tests can learn an ephemeral port. */
+    announce(&la, &o);
+    printf("ethhub listening on %u\n", ntohs(la.sin_port));
+    fflush(stdout);
+
+    struct pollfd pf[2];
+    pf[0].fd = g_sock;
+    pf[0].events = POLLIN;
+    int npf = 1;
+    if (g_tap_fd >= 0) {
+        pf[1].fd = g_tap_fd;
+        pf[1].events = POLLIN;
+        npf = 2;
+    }
+    serve(pf, npf, g_buf);
     print_stats(stderr);
     if (g_pcap)
         fclose(g_pcap);
-    free(buf);
-    free(g_clients);
-    free(g_macs);
+    tables_free();
     close(g_sock);
     return 0;
 }
