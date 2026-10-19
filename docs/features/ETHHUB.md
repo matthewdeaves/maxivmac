@@ -1,9 +1,14 @@
 # ethhub: virtual LAN hub for the emulator
 
 `tools/ethhub/ethhub.c` is a small Ethernet hub/switch that talks to its ports
-over UDP. It exists so that one or more maxivmac instances (with the planned
-DaynaPORT SCSI Ethernet adapter) and a POSIX peer (PeerTalk) can share one
-real layer-2 LAN, including UDP broadcast and TCP, without root on the host.
+over UDP. It exists so that one or more maxivmac instances (using the
+DaynaPORT SCSI Ethernet adapter, see `NETWORKING_DAYNAPORT.md`) and a POSIX
+peer (PeerTalk) can share one real layer-2 LAN, including UDP broadcast and TCP, without root on the host.
+
+Status: the hub is a standalone tool. The emulator does not yet have an
+`--eth=hub` backend that speaks this wire format (`--eth=slirp` is the only
+backend today); the `EthernetBackend` seam in `src/devices/eth_factory.cpp`
+is where it would be added.
 
 ## Wire format (fixed; do not extend)
 

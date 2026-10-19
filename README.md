@@ -109,6 +109,12 @@ MacTCP over Ethernet) with the stock Dayna driver; see
 maxivmac --model=MacPlus --scsi4=daynaport --eth=slirp disk.hfs
 ```
 
+The adapter sits on an emulated NCR5380 SCSI bus that accepts targets at any
+ID ([docs/features/SCSI.md](docs/features/SCSI.md)).  For a shared virtual
+LAN between several emulators and POSIX peers, `tools/ethhub` is a small UDP
+Ethernet hub ([docs/features/ETHHUB.md](docs/features/ETHHUB.md); the emulator
+does not have a hub backend yet).
+
 <!-- ![SLIP demo](media/demo-slip.gif) -->
 > 🎬 *Demo needed — see [media/MEDIA_NEEDED.md](media/MEDIA_NEEDED.md)*
 
@@ -151,6 +157,10 @@ unattended in CI.
 ```sh
 maxivmac --dbg-script=build.dbg --verify=expected.golden disk.img
 ```
+
+Scripts can click, drag, type and wait on drawn text or emulated time
+(`wait for 20s`); see [docs/features/SCRIPTING.md](docs/features/SCRIPTING.md)
+and, for known gaps, [docs/FINDINGS.md](docs/FINDINGS.md).
 
 <!-- ![Scripted build demo](media/demo-scripted-build.gif) -->
 > 🎬 *Demo needed — see [media/MEDIA_NEEDED.md](media/MEDIA_NEEDED.md)*
