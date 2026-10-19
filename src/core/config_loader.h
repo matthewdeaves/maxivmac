@@ -58,6 +58,8 @@ struct LaunchConfig
 	std::string ethMac;						// --eth-mac=xx:xx:xx:xx:xx:xx
 	std::string ethLatency;					// --eth-latency=10ms (emulated time; "" = default, 0 = off)
 
+	bool diskSnapshot = false; // --disk-snapshot: guest writes go to a throw-away copy of each image
+
 	// Shared drives
 	std::vector<std::string> sharedDirs; // --shared <path> (repeatable)
 

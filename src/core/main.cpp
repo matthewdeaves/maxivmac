@@ -12,6 +12,7 @@
 #include "devices/rom.h"
 #include "devices/scsi.h"
 #include "devices/sony.h"
+#include "platform/common/disk_io.h"
 #include "devices/screen.h"
 #include "devices/video.h"
 #include "devices/keyboard.h"
@@ -577,6 +578,7 @@ void ProgramEarlyInit(int argc, char *argv[])
 
 	s_launchConfig = ParseCommandLine(argc, argv);
 	s_emulatorConfig = BuildEmulatorConfig(s_launchConfig);
+	Sony_SetSnapshotMode(s_launchConfig.diskSnapshot);
 
 	/* Apply --diag= early so device init can log */
 	ApplyDiagFlags(s_launchConfig.diagSubsystems);

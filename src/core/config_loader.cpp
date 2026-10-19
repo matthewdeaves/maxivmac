@@ -186,6 +186,8 @@ void PrintUsage(const char *progname)
 			"                   (default 10ms; e.g. 500us, 1s; 0 = off)\n"
 			"  --net-redir=SPEC Port forward for slirp (SLIP or --eth): tcp:hostport:guestip:guestport\n"
 			"                   (--slip-redir is an alias)\n"
+			"  --disk-snapshot  Never write to disk images: the guest works on a temporary copy of each\n"
+			"                   (discarded at exit; makes repeated runs on one image identical)\n"
 			"  --shared=PATH    Mount host directory as shared drive (repeatable)\n"
 			"  -h, --help       Show this help\n"
 			"\n"
@@ -222,6 +224,11 @@ LaunchConfig ParseCommandLine(int argc, char *argv[])
 		if (strcmp(arg, "--headless") == 0)
 		{
 			lc.headless = true;
+			continue;
+		}
+		if (strcmp(arg, "--disk-snapshot") == 0)
+		{
+			lc.diskSnapshot = true;
 			continue;
 		}
 		if (strcmp(arg, "--silent") == 0)

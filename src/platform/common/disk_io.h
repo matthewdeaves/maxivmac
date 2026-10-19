@@ -23,5 +23,8 @@ tMacErr vSonyEjectDelete(DriveIndex driveNo);
 tMacErr vSonyGetName(DriveIndex driveNo, PbufIndex *r);
 
 bool Sony_Insert0(FILE *refnum, bool locked, char *drivepath);
+// With snapshots on, Sony_Insert1 opens a throw-away copy of the image and the
+// original is never written (--disk-snapshot).
+void Sony_SetSnapshotMode(bool on);
 bool Sony_Insert1(char *drivepath, bool silentfail);
 void MakeNewDisk(uint32_t L, char *drivename);

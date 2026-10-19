@@ -107,6 +107,23 @@ expect "key and type edit a new folder name" type_verify.dbg 0 "script completed
 expect "pick Apple menu item" menu_pick.dbg 0 "script completed" disk
 expect "Restart boots from the same disk again" restart_keeps_disk.dbg 0 "script completed" disk
 
+# --disk-snapshot: the guest may write, the image on the host must not change.
+if [ -f "$DISK" ]; then
+    cp "$DISK" "$WORK/snap.hfs"
+    BEFORE="$(cksum < "$WORK/snap.hfs")"
+    (cd "$WORK" && "$EMU" --headless --silent --model=MacPlus --rom="$ROM" --disk-snapshot \
+        --dbg-script="$SCRIPTS/restart_keeps_disk.dbg" "$WORK/snap.hfs" >"$WORK/snap.out" 2>&1)
+    SRC=$?
+    if [ "$SRC" -eq 0 ] && grep -q "script completed" "$WORK/snap.out" \
+        && [ "$BEFORE" = "$(cksum < "$WORK/snap.hfs")" ]; then
+        pass "--disk-snapshot leaves the image unchanged"
+    else
+        fail "--disk-snapshot leaves the image unchanged" "exit $SRC or image modified"
+    fi
+else
+    skip "--disk-snapshot leaves the image unchanged" "disk $DISK not found"
+fi
+
 echo ""
 echo "PASS: $PASS  FAIL: $FAIL  SKIP: $SKIP"
 [ "$FAIL" -eq 0 ]

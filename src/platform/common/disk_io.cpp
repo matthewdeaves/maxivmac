@@ -1,6 +1,9 @@
 #include "platform/common/disk_io.h"
 #include "util/macroman.h"
 #include "storage/startup_disks.h"
+#include "storage/disk_snapshot.h"
+
+#include <unistd.h>
 
 #include <cstdio>
 #include <cstring>
@@ -94,6 +97,13 @@ tMacErr vSonyGetSize(DriveIndex driveNo, uint32_t *sonyCount)
 }
 
 static StartupDisks s_startupDisks;
+static DiskSnapshots s_snapshots;
+static bool s_snapshotMode = false;
+
+void Sony_SetSnapshotMode(bool on)
+{
+	s_snapshotMode = on;
+}
 
 void Sony_RememberStartupDisks()
 {
@@ -132,7 +142,8 @@ static tMacErr vSonyEject0(DriveIndex driveNo, bool deleteit)
 
 	DiskEjectedNotify(driveNo);
 
-	if (deleteit && g_driveNames[driveNo] != nullptr)
+	/* a snapshot is a copy: the host file is never touched */
+	if (deleteit && !s_snapshotMode && g_driveNames[driveNo] != nullptr)
 	{
 		(void)remove(g_driveNames[driveNo]);
 	}
@@ -242,11 +253,23 @@ bool Sony_Insert1(char *drivepath, bool silentfail)
 {
 	bool locked = false;
 	/* printf("Sony_Insert1 %s\n", drivepath); */
-	FILE *refnum = fopen(drivepath, "rb+");
-	if (nullptr == refnum)
+	FILE *refnum = nullptr;
+	if (s_snapshotMode)
 	{
-		locked = true;
-		refnum = fopen(drivepath, "rb");
+		std::string err;
+		locked = access(drivepath, W_OK) != 0;
+		refnum = s_snapshots.open(drivepath, &err);
+		if (nullptr == refnum && !silentfail)
+			fprintf(stderr, "Error: --disk-snapshot: %s: %s\n", drivepath, err.c_str());
+	}
+	else
+	{
+		refnum = fopen(drivepath, "rb+");
+		if (nullptr == refnum)
+		{
+			locked = true;
+			refnum = fopen(drivepath, "rb");
+		}
 	}
 	if (nullptr == refnum)
 	{

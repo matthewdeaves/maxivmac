@@ -146,7 +146,11 @@ the branch that found them.
 - **Symptom:** an end-to-end script that opens the Chooser and leaves it
   running changes the HFS image; the next run of the same image failed to
   boot (flashing "?" disk). Always run guest tests on a fresh copy.
-- **Status:** open (by design; worth a read-only option).
+- **Status:** default unchanged (by design); added `--disk-snapshot`: each image
+  is copied once into an anonymous temporary file and the guest works on the
+  copy (kept across eject/Restart within the run, gone at exit; the host file is
+  never written, and "eject and delete" does not delete it). Covered by
+  `test/test_disk_snapshot.cpp` and a script test.
 
 ### F12. libslirp timers are stored but never fired
 

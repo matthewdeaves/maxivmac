@@ -69,6 +69,7 @@ set(MINIVMAC_SOURCES
     src/storage/drive_manager.cpp
     src/storage/icon_builder.cpp
     src/storage/startup_disks.cpp
+    src/storage/disk_snapshot.cpp
 
     # Language / type system
     src/lang/type_registry.cpp
@@ -458,7 +459,9 @@ add_executable(tests
     tools/icon_extract/icon_decode.cpp
     test/test_drive_manager.cpp
     src/storage/startup_disks.cpp
+    src/storage/disk_snapshot.cpp
     test/test_startup_disks.cpp
+    test/test_disk_snapshot.cpp
     test/test_types.cpp
     test/test_ui.cpp
     test/test_model_defs.cpp
