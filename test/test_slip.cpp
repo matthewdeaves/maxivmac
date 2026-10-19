@@ -100,3 +100,20 @@ TEST_CASE("SLIP zero length packet")
 	slip::Decoder dec;
 	CHECK(feedAll(dec, framed) == 0);
 }
+
+TEST_CASE("SLIP decoder caps an unterminated frame and resynchronises")
+{
+	slip::Decoder dec;
+	/* 1 MiB with no END: the buffer must stay bounded and no packet may appear */
+	for (size_t i = 0; i < (1u << 20); ++i) CHECK_FALSE(dec.feed(0x45));
+	/* the END that finally arrives drops the oversized frame ... */
+	CHECK_FALSE(dec.feed(slip::END));
+	/* ... and the next frame decodes normally */
+	CHECK_FALSE(dec.feed(0x01));
+	CHECK_FALSE(dec.feed(0x02));
+	REQUIRE(dec.feed(slip::END));
+	auto pkt = dec.packet();
+	REQUIRE(pkt.size() == 2);
+	CHECK(pkt[0] == 0x01);
+	CHECK(pkt[1] == 0x02);
+}

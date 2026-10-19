@@ -62,6 +62,12 @@ public:
 	{
 		if (byte == END)
 		{
+			if (overflow_) /* oversized frame: drop it, resynchronise on this END */
+			{
+				SLP_LOG("decode: dropped oversized frame");
+				reset();
+				return false;
+			}
 			if (!accum_.empty())
 			{
 				SLP_LOG("decode: complete packet %lu bytes",
@@ -81,18 +87,18 @@ public:
 			switch (byte)
 			{
 				case ESC_END:
-					accum_.push_back(END);
+					put(END);
 					break;
 				case ESC_ESC:
-					accum_.push_back(ESC);
+					put(ESC);
 					break;
 				default:
-					accum_.push_back(byte);
+					put(byte);
 					break; /* protocol error — be lenient */
 			}
 			return false;
 		}
-		accum_.push_back(byte);
+		put(byte);
 		return false;
 	}
 
@@ -108,11 +114,23 @@ public:
 	{
 		accum_.clear();
 		escaped_ = false;
+		overflow_ = false;
 	}
 
 private:
+	/* The guest controls the byte stream: without a cap a guest that never sends END makes the
+	   host buffer grow without bound. */
+	static constexpr size_t kMaxPacket = 65535;
+	void put(uint8_t b)
+	{
+		if (accum_.size() < kMaxPacket)
+			accum_.push_back(b);
+		else
+			overflow_ = true;
+	}
 	std::vector<uint8_t> accum_;
 	bool escaped_ = false;
+	bool overflow_ = false;
 };
 
 } /* namespace slip */
