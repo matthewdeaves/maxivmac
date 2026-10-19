@@ -20,6 +20,7 @@
 #include "storage/host_volume.h"
 #include "storage/drive_manager.h"
 
+#include <algorithm>
 #include <array>
 #include <cinttypes>
 #include <cstdint>
@@ -1028,12 +1029,16 @@ static void RegGetVol(uint32_t regParam[], uint16_t &regResult)
 	DIAG(ExtFS, "GetVol → %u files, %u dirs, %u bytes\n", files, dirs, bytes);
 }
 
+/* Largest single read/write the host will buffer for the guest.  `count` comes straight from
+   the guest's ioReqCount (up to 4 GiB); a std::vector of that size is a host DoS. */
+static constexpr uint32_t kMaxForkTransfer = 64u * 1024 * 1024;
+
 /* Read bytes from an open fork into guest RAM. */
 static void RegRead(uint32_t regParam[], uint16_t &regResult)
 {
 	uint32_t handle = regParam[0];
 	uint32_t offset = regParam[1];
-	uint32_t count = regParam[2];
+	uint32_t count = std::min(regParam[2], kMaxForkTransfer); /* short read is reported in regParam[0] */
 	uint32_t guestBuf = regParam[3];
 
 	auto [vol, local] = volumeFromHandle(handle);
@@ -1149,7 +1154,7 @@ static void RegWrite(uint32_t regParam[], uint16_t &regResult)
 {
 	uint32_t handle = regParam[0];
 	uint32_t offset = regParam[1];
-	uint32_t count = regParam[2];
+	uint32_t count = std::min(regParam[2], kMaxForkTransfer); /* short write is reported in regParam[0] */
 	uint32_t guestBuf = regParam[3];
 
 	auto [vol, local] = volumeFromHandle(handle);
