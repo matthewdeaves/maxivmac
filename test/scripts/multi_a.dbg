@@ -1,0 +1,5 @@
+# First of two --dbg-script files: waits for the boot.
+set default-timeout 120s
+wait text "Special"
+wait for 100ms
+screenshot "multi_a"

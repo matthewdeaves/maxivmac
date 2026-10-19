@@ -330,6 +330,10 @@ struct Debugger::Impl
 
 	/* Pending script (scripting suspension/resumption) */
 	PendingScript pendingScript;
+	std::vector<ScriptLine> *activeLines = nullptr; /* lines of the loop now running */
+	size_t activeIndex = 0;							/* the line being executed in it */
+	ScriptLine activeLine;							/* copy of that line (handlers may splice) */
+	bool inScriptLine = false;
 	bool scriptBreak = false;
 	bool scriptMode = false;
 
@@ -782,9 +786,58 @@ int Debugger::commandTableSize() const
 
 void Debugger::executeCommands(const std::vector<std::string> &cmds)
 {
+	std::vector<ScriptLine> lines;
+	lines.reserve(cmds.size());
+	for (auto &c : cmds) lines.push_back({c, std::string(), 0});
+	executeScript(std::move(lines));
+}
+
+bool Debugger::spliceScript(std::vector<ScriptLine> &lines)
+{
+	if (!impl_->activeLines) return false;
+	auto &v = *impl_->activeLines;
+	v.insert(v.begin() + static_cast<std::ptrdiff_t>(impl_->activeIndex + 1),
+			 std::make_move_iterator(lines.begin()), std::make_move_iterator(lines.end()));
+	return true;
+}
+
+const ScriptLine *Debugger::currentScriptLine() const
+{
+	return impl_->inScriptLine ? &impl_->activeLine : nullptr;
+}
+
+void Debugger::executeScript(std::vector<ScriptLine> cmds)
+{
+	/* Remember the enclosing run (a breakpoint's commands can fire while a
+	   script line is executing) and restore it however this one ends. */
+	struct Scope
+	{
+		Impl *impl;
+		std::vector<ScriptLine> *lines;
+		size_t index;
+		ScriptLine line;
+		bool in;
+		explicit Scope(Impl *i)
+			: impl(i), lines(i->activeLines), index(i->activeIndex), line(i->activeLine),
+			  in(i->inScriptLine)
+		{
+		}
+		~Scope()
+		{
+			impl->activeLines = lines;
+			impl->activeIndex = index;
+			impl->activeLine = line;
+			impl->inScriptLine = in;
+		}
+	} scope(impl_);
+	impl_->activeLines = &cmds;
+
 	for (size_t i = 0; i < cmds.size(); ++i)
 	{
-		auto &line = cmds[i];
+		impl_->activeIndex = i;
+		impl_->activeLine = cmds[i];
+		impl_->inScriptLine = true;
+		const std::string line = cmds[i].text;
 		if (auto p = line.find_first_not_of(" \t"); p != std::string::npos && line[p] == '#')
 			continue;
 
@@ -799,11 +852,11 @@ void Debugger::executeCommands(const std::vector<std::string> &cmds)
 			if (impl_->state != DbgState::Stopped || impl_->scriptBreak)
 			{
 				// Script suspended — save remaining lines for resumption
-				bool wasBreak = impl_->scriptBreak;
+				// (a `source` inside this script has spliced its lines into
+				// cmds, so they are part of the remainder)
 				impl_->scriptBreak = false;
-				impl_->pendingScript.lines = cmds;
+				impl_->pendingScript.lines = std::move(cmds);
 				impl_->pendingScript.nextLine = static_cast<int>(i + 1);
-				(void)wasBreak;
 				return;
 			}
 		}
@@ -815,6 +868,7 @@ void Debugger::executeCommands(const std::vector<std::string> &cmds)
 			std::exit(2);
 		}
 	}
+	impl_->inScriptLine = false;
 	// All lines executed — clear any pending state
 	impl_->pendingScript.clear();
 
@@ -835,9 +889,10 @@ bool Debugger::tryResumeScript(const Breakpoint *firedBp)
 	{
 		// Condition met — resume the pending script from where it left off
 		auto &ps = impl_->pendingScript;
-		std::vector<std::string> remaining(ps.lines.begin() + ps.nextLine, ps.lines.end());
+		std::vector<ScriptLine> remaining(std::make_move_iterator(ps.lines.begin() + ps.nextLine),
+										  std::make_move_iterator(ps.lines.end()));
 		ps.clear();
-		executeCommands(remaining);
+		executeScript(std::move(remaining));
 		return (impl_->state != DbgState::Stopped);
 	}
 	// Non-scriptOwned breakpoint → drop to interactive prompt
@@ -847,27 +902,51 @@ bool Debugger::tryResumeScript(const Breakpoint *firedBp)
 
 /* ── Source file ─────────────────────────────────────── */
 
-bool SourceFile(Debugger &dbg, std::string_view path)
+static bool ReadScriptFile(Debugger &dbg, const std::string &path, std::vector<ScriptLine> &out)
 {
-	std::string p(path);
-	std::FILE *f = std::fopen(p.c_str(), "r");
+	std::FILE *f = std::fopen(path.c_str(), "r");
 	if (!f)
 	{
-		dbg.io().write("source: cannot open '%s'\n", p.c_str());
+		dbg.io().write("source: cannot open '%s'\n", path.c_str());
 		return false;
 	}
 
-	std::vector<std::string> cmds;
 	char buf[1024];
+	int lineNo = 0;
 	while (std::fgets(buf, sizeof(buf), f))
 	{
 		size_t len = std::strlen(buf);
 		if (len > 0 && buf[len - 1] == '\n') buf[len - 1] = '\0';
-		cmds.emplace_back(buf);
+		out.push_back({buf, path, ++lineNo});
 	}
 	std::fclose(f);
+	return true;
+}
 
-	dbg.executeCommands(cmds);
+bool SourceFile(Debugger &dbg, std::string_view path)
+{
+	std::vector<ScriptLine> lines;
+	if (!ReadScriptFile(dbg, std::string(path), lines)) return false;
+
+	/* Inside a running script the file's lines run in place, before the
+	   lines that follow the `source`: a wait in the file suspends the whole
+	   script and nothing after it is lost. */
+	if (!dbg.spliceScript(lines)) dbg.executeScript(std::move(lines));
+	return true;
+}
+
+bool SourceFiles(Debugger &dbg, const std::vector<std::string> &paths, std::string *badPath)
+{
+	std::vector<ScriptLine> lines;
+	for (auto &p : paths)
+	{
+		if (!ReadScriptFile(dbg, p, lines))
+		{
+			if (badPath) *badPath = p;
+			return false;
+		}
+	}
+	dbg.executeScript(std::move(lines));
 	return true;
 }
 

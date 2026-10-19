@@ -48,8 +48,19 @@ run() {
     fi
     # Deliberately run from an unrelated directory: data/ lookup must not
     # depend on the current directory.
+    case "$script" in /*) ;; *) script="$SCRIPTS/$script" ;; esac
     OUT="$(cd "$WORK" && "$EMU" --headless --silent --model=MacPlus --rom="$ROM" \
-        --dbg-script="$SCRIPTS/$script" $args 2>&1)"
+        --dbg-script="$script" $args 2>&1)"
+    RC=$?
+}
+
+# run_many <script>...  -> several --dbg-script flags, in order, on the disk
+run_many() {
+    cp "$DISK" "$WORK/disk.hfs"
+    flags=""
+    for sc in "$@"; do flags="$flags --dbg-script=$sc"; done
+    OUT="$(cd "$WORK" && "$EMU" --headless --silent --model=MacPlus --rom="$ROM" \
+        $flags "$WORK/disk.hfs" 2>&1)"
     RC=$?
 }
 
@@ -126,6 +137,35 @@ if [ -f "$DISK" ]; then
     fi
 else
     skip "--disk-snapshot leaves the image unchanged" "disk $DISK not found"
+fi
+
+# `source` inside a script: a wait in the sourced file must not drop the lines
+# after it, nor the lines after the `source` itself.
+if [ -f "$DISK" ]; then
+    rm -f "$MAXIVMAC_OUT_DIR"/src_*.png
+    cat > "$WORK/source_outer.dbg" <<EOF
+set default-timeout 120s
+source "$SCRIPTS/source_inner.dbg"
+screenshot "src_outer_after"
+EOF
+    run "$WORK/source_outer.dbg" disk
+    if [ "$RC" -eq 0 ] && [ -f "$MAXIVMAC_OUT_DIR/src_inner_after_wait.png" ] \
+        && [ -f "$MAXIVMAC_OUT_DIR/src_inner_end.png" ] && [ -f "$MAXIVMAC_OUT_DIR/src_outer_after.png" ]; then
+        pass "source keeps the lines after a wait"
+    else
+        fail "source keeps the lines after a wait" "exit $RC; $(ls "$MAXIVMAC_OUT_DIR" | tr '\n' ' ')"
+    fi
+
+    rm -f "$MAXIVMAC_OUT_DIR"/multi_*.png
+    run_many "$SCRIPTS/multi_a.dbg" "$SCRIPTS/multi_b.dbg"
+    if [ "$RC" -eq 0 ] && [ -f "$MAXIVMAC_OUT_DIR/multi_a.png" ] && [ -f "$MAXIVMAC_OUT_DIR/multi_b.png" ]; then
+        pass "several --dbg-script files run in order"
+    else
+        fail "several --dbg-script files run in order" "exit $RC"
+    fi
+else
+    skip "source keeps the lines after a wait" "disk $DISK not found"
+    skip "several --dbg-script files run in order" "disk $DISK not found"
 fi
 
 echo ""

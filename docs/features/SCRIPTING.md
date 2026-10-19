@@ -58,6 +58,23 @@ e.g. `mousedown 52 9` then `wait text "Eject"`.
 Since it's just a `.dbg` file, you can also `source build.dbg` from
 the interactive debugger prompt.
 
+`--dbg-script` may be given several times; the files run one after another
+as a single script, in the order given (a `wait` in the first holds the
+second back).  A file that cannot be read stops the run with status 2 before
+anything executes.
+
+### source
+
+```
+source "other.dbg"
+```
+
+Runs the file's lines in place: they execute next, before the lines that
+follow the `source` line, and a `wait` inside the file suspends the whole
+script as usual.  The path is relative to the emulator's **current working
+directory** (not the script's), and must be quoted when it contains `/`
+(the tokenizer reads an unquoted `/` as an operator).
+
 ## New breakpoint types
 
 The existing `break` command gains new condition types.  All

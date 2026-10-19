@@ -747,14 +747,14 @@ bool ProgramMain()
 	{
 		if (!s_launchConfig.dbgScripts.empty() && !s_launchConfig.explicitDebugger)
 			dbg->setScriptMode(true);
-		for (auto &script : s_launchConfig.dbgScripts)
+		/* All scripts run as one, in the order given. */
+		std::string bad;
+		if (!s_launchConfig.dbgScripts.empty() &&
+			!SourceFiles(*dbg, s_launchConfig.dbgScripts, &bad) && dbg->scriptMode())
 		{
-			if (!SourceFile(*dbg, script) && dbg->scriptMode())
-			{
-				/* Unattended run: a missing script must not look like success. */
-				std::fprintf(stderr, "FAIL: cannot read script '%s'\n", script.c_str());
-				std::exit(2);
-			}
+			/* Unattended run: a missing script must not look like success. */
+			std::fprintf(stderr, "FAIL: cannot read script '%s'\n", bad.c_str());
+			std::exit(2);
 		}
 	}
 

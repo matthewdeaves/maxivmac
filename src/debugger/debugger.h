@@ -19,6 +19,7 @@
 #endif
 
 #include "debugger/bp_screen.h"
+#include "debugger/script_suspend.h"
 
 /* InstructionCount = uint64_t; canonical definition in core/machine.h */
 using InstructionCount = uint64_t;
@@ -147,6 +148,17 @@ public:
 	// Breakpoint commands (used by cmd_break.cpp)
 	void executeCommands(const std::vector<std::string> &cmds);
 
+	// Run script lines.  A command that resumes the CPU suspends the rest.
+	void executeScript(std::vector<ScriptLine> lines);
+
+	// Move `lines` in right after the line being executed, so they run next,
+	// before the rest of the running script (how `source` works inside a
+	// script).  Returns false, leaving `lines` alone, when no script is running.
+	bool spliceScript(std::vector<ScriptLine> &lines);
+
+	// The script line being executed (null outside a script run).
+	const ScriptLine *currentScriptLine() const;
+
 	// Script resume check: resumes a pending script when a scriptOwned BP fires.
 	// Returns true if the CPU was resumed (caller should return immediately).
 	bool tryResumeScript(const Breakpoint *firedBp);
@@ -178,5 +190,12 @@ extern bool g_watchpointActive;
 void dbg_printf(const char *fmt, ...)
 	__attribute__((format(MAXIVMAC_PRINTF_FORMAT_STYLE, 1, 2)));
 
-// Load and execute every line of a .dbg script file.
+// Load and execute every line of a .dbg script file.  Inside a running
+// script the lines are spliced in at the current position.
 bool SourceFile(Debugger &dbg, std::string_view path);
+
+// Load several script files and run them one after another as a single
+// script (a wait in the first does not let the second start early).  Nothing
+// runs when a file cannot be read; `badPath` then names it.
+bool SourceFiles(Debugger &dbg, const std::vector<std::string> &paths,
+				 std::string *badPath = nullptr);

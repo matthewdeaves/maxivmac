@@ -1,0 +1,8 @@
+# Sourced by the runner (test/run_script_tests.sh "source keeps the lines
+# after a wait"): a wait in the middle, with lines before and after it.
+timeout 120s
+wait text "Special"
+wait for 100ms
+screenshot "src_inner_after_wait"
+wait for 100ms
+screenshot "src_inner_end"

@@ -48,6 +48,25 @@ the branch that found them.
   `test/fixtures/desktop.png`, which is absent); models other than the Plus.
 - The `data/` source-directory fallback is baked into the binary.
 
+### S5. `source` in a script, and several `--dbg-script` files, lost lines
+
+- **Symptom:** a `wait` inside a file run by `source` (or by the first of two
+  `--dbg-script` files) saved only that file's remaining lines; the caller's
+  loop then overwrote them with its own, so everything after the first
+  `wait` in the sourced file vanished, and the script reported success. The
+  second `--dbg-script` file also started immediately, before the first
+  one's waits had finished, and the first file reaching its end exited 0
+  before the second ran. `test/net/run-ping.sh` worked around it by
+  concatenating blocks.
+- **Cause:** `executeCommands` was re-entered by `source` and each call
+  owned the single pending-script slot.
+- **Status:** fixed. `source` inside a running script splices the file's
+  lines into the running script, and all `--dbg-script` files are read and
+  run as one script (`SourceFiles`). Tests: "source keeps the lines after a
+  wait" and "several --dbg-script files run in order" in
+  `test/run_script_tests.sh`. Unquoted absolute paths (`source /a/b.dbg`)
+  still fail: the tokenizer reads `/` as an operator, so quote the path.
+
 ## 2026-10: found during feat/scsi-bus
 
 ### F1. Legacy SCSI stub: SEL check only matches ICR == 0x04
