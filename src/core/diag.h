@@ -32,6 +32,7 @@ enum class DiagSubsystem : uint8_t
 	VID,   /* [VID]   video                              */
 	INIT,  /* [INIT]  INIT version/identity                */
 	CACHE, /* [CACHE] catalog cache: scan, evict, CNID resolve  */
+	SCSI,  /* [SCSI]  SCSI targets: CDBs, data phases, status    */
 	kCount
 };
 
