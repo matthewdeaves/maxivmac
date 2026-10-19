@@ -505,3 +505,14 @@ else()
     target_compile_definitions(tests PRIVATE "HAVE_ETH_HUB=0")
 endif()
 add_test(NAME tests COMMAND tests WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+
+# End-to-end MacTCP ping over the emulated DaynaPORT (test/net, docs/features/
+# NETWORKING_TESTING.md).  Needs software that is not in the repository, named by
+# environment variables; without it the test is SKIPPED (exit code 77).
+find_program(BASH_PROGRAM bash)
+if(BASH_PROGRAM AND UNIX)
+    add_test(NAME net_ping
+        COMMAND "${BASH_PROGRAM}" "${CMAKE_SOURCE_DIR}/test/net/run-ping.sh" "$<TARGET_FILE:maxivmac>"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+    set_tests_properties(net_ping PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 900 LABELS "net")
+endif()

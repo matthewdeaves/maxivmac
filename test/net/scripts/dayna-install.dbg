@@ -1,0 +1,42 @@
+# Run the DaynaPORT installer (second disk) against the boot disk (first disk):
+# Custom Install of "AppleTalk v58.0.0 for System 6" and "DaynaPORT SCSI/Link",
+# then Restart.  Coordinates are for the 512x342 Mac Plus screen.
+set default-timeout 300s
+showtext on
+wait text "Special"
+wait for 3s
+# open the installer floppy (top right) and start Installer: double-clicks
+click 475 105
+wait for 1s
+click 475 105
+wait for 4s
+click 129 252
+wait for 1s
+click 129 252
+wait text "Continue"
+wait for 2s
+click 405 296
+# the script window draws a few seconds after its text; wait for the text, then settle
+wait text "Switch Disk"
+wait for 10s
+# pop-up "Easy Install" -> "Custom Install"
+click 105 64 100 79
+wait for 3s
+click 100 79 hold 200ms
+wait for 10s
+# tick "AppleTalk v58.0.0 for System 6" and "DaynaPORT SCSI/Link"
+click 39 99 hold 100ms
+wait for 1s
+click 39 194 hold 100ms
+wait for 3s
+screenshot "dayna_selected"
+click 422 291 hold 100ms
+wait text "successful"
+wait for 3s
+screenshot "dayna_done"
+# Restart
+click 390 234 hold 100ms
+wait text "Welcome to Macintosh"
+wait text "Special"
+wait for 5s
+screenshot "dayna_restarted"

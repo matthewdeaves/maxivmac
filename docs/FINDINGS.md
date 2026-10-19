@@ -271,3 +271,20 @@ the branch that found them.
   real `ethhub` with three backends (unicast, broadcast, flooding); **not**
   verified: a guest actually talking across a hub (two emulators, or an
   emulator and the Docker peer), IPv6 hosts, a hub behind NAT.
+
+### F24. MacTCP in the System Folder blocks the switch to EtherTalk
+
+- **Symptom:** with MacTCP installed at boot the Network cdev says "Could not
+  switch to EtherTalk"; `Open ".ATP"` returns -108 (memFullErr): 27.9 KB of
+  system heap free against about 31.4 KB needed (33 KB without MacTCP).
+- **Status:** worked around in the test disk prep: switch to EtherTalk first,
+  then move MacTCP into the System Folder and restart (`NETWORKING_TESTING.md`).
+  Not an emulator problem; a bigger system heap (not found) would be the cure.
+
+### F25. The MacTCP ping runs end to end
+
+- **Status:** `test/net/run-ping.sh` (ctest `net_ping`, skipped without the
+  Apple/Dayna files) pings 10.0.2.2 from System 6.0.8 over DaynaPORT + slirp:
+  5 out / 5 in, from a freshly prepared disk, including a guest Restart, no
+  environment hacks. Needs F21 and F22 (without `--eth-latency` it is
+  1 reply of 5). Not covered: TCP, DNS name resolution.

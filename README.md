@@ -103,7 +103,8 @@ maxivmac --serial-a=slip --net-redir=tcp:8080:10.0.2.15:80 disk.img
 
 A DaynaPORT SCSI/Link adapter gives the guest real Ethernet (EtherTalk,
 MacTCP over Ethernet) with the stock Dayna driver; see
-[docs/features/NETWORKING_DAYNAPORT.md](docs/features/NETWORKING_DAYNAPORT.md).
+[docs/features/NETWORKING_DAYNAPORT.md](docs/features/NETWORKING_DAYNAPORT.md). The end-to-end MacTCP ping test and its disk preparation are in
+[docs/features/NETWORKING_TESTING.md](docs/features/NETWORKING_TESTING.md).
 
 ```sh
 maxivmac --model=MacPlus --scsi4=daynaport --eth=slirp disk.hfs
