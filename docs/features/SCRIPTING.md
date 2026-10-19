@@ -227,6 +227,41 @@ subsequent events are scheduled relative to the previous one.
 `type` and `key` both push to the same queue — you can interleave
 them freely, and the timing is cumulative.
 
+### Mouse: click, drag, move, mousedown, mouseup
+
+```
+click 120 80                    # quick click
+click 52 9 hold 1s              # press, hold 1 s, release
+click button "OK"               # centre of a dialog button
+drag 22 9 30 40                 # press at (22,9), glide to (30,40), release
+drag 22 9 30 40 hold 1s         # ... dwell 1 s on the target before releasing
+click 22 9 30 40                # same as drag
+move 200 100                    # just move the pointer
+mousedown 52 9                  # press (optionally after moving)
+mouseup
+```
+
+Coordinates are Mac screen pixels (0,0 = top-left of the 512x342 Plus
+screen).  Like `type` and `key`, mouse commands only **queue** events; the
+guest runs when the script next waits, so follow them with `wait for` or
+`wait text`.  Gestures queue behind each other (a `mouseup` after a
+`drag` is delivered after the drag completes).
+
+**Timing.**  The emulated mouse is sampled once per 60 Hz tick: one event
+per tick, and after a button event the device ignores input for 4 ticks.
+The gestures space their events in whole ticks to respect that:
+
+| Gesture | Timeline |
+|---|---|
+| `click x y` | legacy: move, press, release; the device stretches the press to ~4 ticks. Fine for buttons, too quick for pull-down menus |
+| `click x y hold D` | move, press 2 ticks later, release after `D` (at least 5 ticks) |
+| `drag x1 y1 x2 y2` | move, press, wait 6 ticks, 10 glide steps 0.1 s apart, dwell 0.3 s (`hold D` overrides; min 8 ticks), release |
+| `mousedown [x y]`, `mouseup`, `move x y` | one event each, queued after earlier gestures |
+
+To open a menu and look at it: `mousedown 52 9`, `wait for 1s`,
+`screenshot "menu"`, `mouseup`.  To choose an item, use `drag` from the
+menu title to the item.
+
 ### info keys
 
 ```
@@ -237,10 +272,10 @@ Show the pending input queue — future key-down/key-up events and
 their scheduled cycle counts.  Useful for debugging when keystrokes
 aren't being consumed as expected.
 
-### clear keys
+### clearkeys
 
 ```
-clear keys
+clearkeys
 ```
 
 Discard all pending key events from the input queue.
