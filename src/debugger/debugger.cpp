@@ -1284,16 +1284,16 @@ bool Debugger::trapHook(uint16_t trapWord)
 		auto *info = g_trapDefs.dispatchInfo(trapWord);
 		if (info)
 		{
-			/* Read selector from current CPU state */
+			/* Register selectors only.  ParamLoc::Stack is 0, so idx would be -1: the selector
+			   is on the stack, not in a register (reading dregs[-1] was an out-of-bounds read). */
 			int idx = static_cast<int>(info->selectorParam.loc) - 1;
-			uint32_t dregs[8], aregs[8];
-			m68k_getRegs(dregs, aregs);
-			uint16_t selector = 0;
-			if (idx < 8)
-				selector = static_cast<uint16_t>(dregs[idx]);
-			else
-				selector = static_cast<uint16_t>(aregs[idx - 8]);
-			bp = lookupBySubtrap(trapWord, selector);
+			if (idx >= 0)
+			{
+				uint32_t dregs[8], aregs[8];
+				m68k_getRegs(dregs, aregs);
+				uint16_t selector = static_cast<uint16_t>(idx < 8 ? dregs[idx] : aregs[idx - 8]);
+				bp = lookupBySubtrap(trapWord, selector);
+			}
 		}
 	}
 
