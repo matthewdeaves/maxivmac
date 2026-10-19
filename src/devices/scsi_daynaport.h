@@ -48,6 +48,7 @@ public:
 	size_t cdbLength(uint8_t opcode) const override { return (opcode == 0x40 || opcode == 0x80) ? 6 : 0; }
 	scsi::Step command(uint8_t lun, std::span<const uint8_t> cdb) override;
 	scsi::Step dataOutDone() override;
+	scsi::Step dataInDone() override;
 	void busReset() override;
 	void abort() override;
 	void tick() override;
@@ -61,6 +62,7 @@ public:
 		uint32_t txDropped = 0;	  // guest frames dropped (link down or backend refused)
 		uint32_t rxFiltered = 0;  // received frames not addressed to this adapter
 		uint32_t rxOversize = 0;  // received frames dropped: too big for the guest's READ allocation
+		uint32_t rxLost = 0;	  // frames already dequeued for a READ that bus reset/ABORT cut short
 	};
 	const Stats &stats() const { return stats_; }
 	// Frames lost to receive-queue overflow in the backend.
@@ -85,6 +87,7 @@ private:
 
 	std::unique_ptr<EthernetBackend> eth_;
 	Mac mac_;
+	Mac defaultMac_;
 	Options opt_;
 	std::vector<Mac> multicast_;
 	bool allMulticast_ = false;
@@ -95,4 +98,6 @@ private:
 	Stats stats_;
 	bool enabled_ = false;
 	bool writeHeader_ = false;
+	uint32_t readFrames_ = 0; // frames in the READ data phase not yet fully transferred
+	void loseInFlight();
 };

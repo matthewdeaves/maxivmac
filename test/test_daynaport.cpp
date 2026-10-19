@@ -575,3 +575,132 @@ TEST_CASE("daynaport: MAC override needs six data bytes; a custom --eth-mac is t
 	Bytes m = r.read(0x09, 6, 0, 18);
 	CHECK(Bytes(m.begin(), m.begin() + 6) == Bytes{2, 1, 2, 3, 4, 5});
 }
+
+TEST_CASE("daynaport: bus reset restores the power-on state")
+{
+	DnRig r;
+	r.enable();
+	const DaynaPortTarget::Mac novel = {2, 0, 0, 0xAB, 0xCD, 0xEF};
+	r.command(0x0C, 6, 0x40);
+	r.output(Bytes(novel.begin(), novel.end()), false);
+	r.finish(0);
+	r.command(0x0D, 6, 0);
+	r.output(Bytes(6, 0x01), false);
+	r.finish(0);
+	r.command(0x08, 1, 0); // leaves a pending sense
+	r.finish(2);
+	r.eth->inject(makeFrame(60, 1));
+	r.eth->polls = 0;
+	r.c.write(ICR, 0x80, false); // RST
+	r.c.write(ICR, 0, false);
+
+	CHECK(r.t.mac() == DaynaPortTarget::kDefaultMac);
+	CHECK(r.t.multicast().empty());
+	CHECK(r.eth->queued() == 0);
+	r.command(0x0A, 60, 0); // disabled
+	r.finish(2);
+	Bytes s = r.read(0x03, 0, 0, 9);
+	CHECK(s[2] == 2); // only the NOT READY just above; the old ILLEGAL REQUEST is gone
+}
+
+TEST_CASE("daynaport: BUS DEVICE RESET message resets like a bus reset; ABORT keeps state")
+{
+	DnRig r;
+	r.enable();
+	auto message = [&](uint8_t m) {
+		REQUIRE(r.h.select(4, true));
+		r.c.write(ODR, m, false);
+		r.c.write(ICR, I_DATA, false);
+		r.c.write(ICR, I_DATA | I_ACK, false);
+		r.c.write(ICR, 0, false);
+		CHECK_FALSE(r.h.bsy());
+	};
+	message(0x06); // ABORT
+	r.command(0x0A, 60, 0);
+	r.output(makeFrame(60, 1), false);
+	r.finish(0); // still enabled
+	message(0x0C); // BUS DEVICE RESET
+	r.command(0x0A, 60, 0);
+	r.finish(2); // disabled
+}
+
+TEST_CASE("daynaport: a bus reset in a record-framed WRITE does not leak into the next command")
+{
+	DnRig r;
+	r.enable();
+	r.command(0x0A, 132, 0x80);
+	r.h.sendByte(0); // part of a header, then ABORT
+	r.c.write(ICR, 0x80, false);
+	r.c.write(ICR, 0, false);
+	r.enable();
+	r.command(0x0A, 60, 0);
+	r.output(makeFrame(60, 1), false);
+	r.finish(0);
+	CHECK(r.eth->sent.size() == 1);
+}
+
+TEST_CASE("daynaport: tick() pumps the backend once per call")
+{
+	DnRig r;
+	r.t.tick();
+	r.t.tick();
+	CHECK(r.eth->polls == 2);
+}
+
+TEST_CASE("daynaport: frames of a READ cut short by a bus reset are counted in rxLost")
+{
+	DnRig r;
+	r.enable();
+	r.eth->inject(makeFrame(60, 1));
+	r.command(0x08, 1524, 0xC0);
+	CHECK(r.h.recvByte() == 0); // part of the record only
+	r.c.write(ICR, 0x80, false); // RST
+	r.c.write(ICR, 0, false);
+	CHECK(r.t.stats().rxFrames == 1);
+	CHECK(r.t.stats().rxLost == 1);
+}
+
+TEST_CASE("daynaport: frames of a READ cut short by an ABORT message are counted in rxLost")
+{
+	DnRig r(4, DaynaPortTarget::kDefaultMac, {true});
+	r.enable();
+	for (uint8_t i = 1; i <= 2; i++) r.eth->inject(makeFrame(60, i));
+	r.command(0x08, 1524, 0xC0);
+	CHECK(r.h.recvByte() == 0);
+	r.c.write(ICR, I_ATN | I_ACK, false); // ATN with the next byte: MESSAGE OUT follows
+	r.c.write(ICR, I_ATN, false);
+	CHECK(r.h.phase() == P_MSGOUT);
+	r.c.write(ODR, 0x06, false); // ABORT
+	r.c.write(ICR, I_DATA, false);
+	r.c.write(ICR, I_DATA | I_ACK, false);
+	r.c.write(ICR, 0, false);
+	CHECK_FALSE(r.h.bsy());
+	CHECK(r.t.stats().rxLost == 2);
+}
+
+TEST_CASE("daynaport: a completed READ loses nothing")
+{
+	DnRig r;
+	r.enable();
+	r.eth->inject(makeFrame(60, 1));
+	r.read(0x08, 1524, 0xC0, 70);
+	r.read(0x08, 1524, 0xC0, 6);
+	CHECK(r.t.stats().rxLost == 0);
+}
+
+TEST_CASE("daynaport: sense data is cleared by the next command but not by INQUIRY")
+{
+	DnRig r;
+	r.command(0x0A, 60, 0); // WRITE while disabled: NOT READY
+	r.finish(2);
+	r.read(0x12, 36, 0, 36); // INQUIRY keeps it
+	Bytes s1 = r.read(0x03, 9, 0, 9);
+	CHECK(s1[2] == 2);
+	Bytes s2 = r.read(0x03, 9, 0, 9);
+	CHECK(s2[2] == 0);
+	r.command(0x0A, 60, 0);
+	r.finish(2);
+	r.command(0x00, 0, 0); // TEST UNIT READY clears it
+	r.finish(0);
+	CHECK(r.read(0x03, 9, 0, 9)[2] == 0);
+}

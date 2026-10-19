@@ -79,7 +79,7 @@ uint32_t DaynaPortTarget::rxDropped() const
 }
 
 DaynaPortTarget::DaynaPortTarget(std::unique_ptr<EthernetBackend> eth, Mac mac, Options opt)
-	: eth_(std::move(eth)), mac_(mac), opt_(opt)
+	: eth_(std::move(eth)), mac_(mac), defaultMac_(mac), opt_(opt)
 {
 }
 
@@ -117,10 +117,29 @@ scsi::Step DaynaPortTarget::error(uint8_t senseKey)
 	return scsi::Step{scsi::Step::StatusPhase, {}, {}, scsi::Status::CheckCondition};
 }
 
+// Frames are dequeued when a READ is built, so a READ the bus never finishes
+// (bus reset, ABORT, or a new command arriving) loses them.  The guest cannot
+// have seen all of them; count them so the loss is not silent.
+void DaynaPortTarget::loseInFlight()
+{
+	for (uint32_t i = 0; i < readFrames_; i++) bump(stats_.rxLost);
+	readFrames_ = 0;
+}
+
+scsi::Step DaynaPortTarget::dataInDone()
+{
+	readFrames_ = 0; // the whole data phase went out
+	return scsi::Step{scsi::Step::StatusPhase, {}, {}, scsi::Status::Good};
+}
+
 scsi::Step DaynaPortTarget::command(uint8_t lun, std::span<const uint8_t> cdb)
 {
+	loseInFlight();
 	cdb_.fill(0);
 	std::copy_n(cdb.begin(), std::min(cdb.size(), cdb_.size()), cdb_.begin());
+	// Sense data lasts until the next command, except INQUIRY and REQUEST SENSE
+	// which leave it alone (SPC).
+	if (cdb_[0] != kRequestSense && cdb_[0] != kInquiry) sense_ = 0;
 	scsi::Step s = handle(lun);
 	SCSI_LOG("dayna: lun %u CDB %s -> %s len %zu status %u", lun, hex(cdb).c_str(),
 			 s.kind == scsi::Step::DataIn ? "DATA-IN" : s.kind == scsi::Step::DataOut ? "DATA-OUT" : "STATUS",
@@ -201,6 +220,7 @@ scsi::Step DaynaPortTarget::handle(uint8_t lun)
 				const uint32_t crc = crc32(r + kReadHeader, n);
 				for (int i = 0; i < 4; i++) r[kReadHeader + n + i] = uint8_t(crc >> (8 * i));
 				bump(stats_.rxFrames);
+				readFrames_++;
 				r[0] = uint8_t((n + 4) >> 8);
 				r[1] = uint8_t(n + 4);
 				if (total) buf_[last + 5] |= kMoreFlag;
@@ -218,7 +238,9 @@ scsi::Step DaynaPortTarget::handle(uint8_t lun)
 				const uint32_t lost = rxDropped();
 				for (int i = 0; i < 4; i++) buf_[14 + i] = uint8_t(lost >> (24 - 8 * i));
 			}
-			// Hardware returns all 18 bytes even for the diagnostics size-six CDB.
+			// 18 = 6 (MAC) + 3 * 4 (counters): the record BlueSCSI-v2 calls
+			// RETRIEVE_STATS.  Hardware returns all of it even for the
+			// diagnostics' size-six CDB, and so does the donor.
 			return dataIn(18);
 		case kWrite:
 			if (!enabled_) return error(kNotReady);
@@ -331,16 +353,28 @@ bool DaynaPortTarget::accepts(std::span<const uint8_t> frame) const
 	return false;
 }
 
+// SCSI bus reset or BUS DEVICE RESET: back to the power-on state.  The
+// adapter is disabled, the MAC override and multicast list are forgotten,
+// pending frames and sense are lost and any transfer in flight is aborted.
+// Statistics keep counting across a reset.
 void DaynaPortTarget::busReset()
 {
+	loseInFlight();
 	enabled_ = false;
 	sense_ = 0;
 	length_ = 0;
 	writeHeader_ = false;
+	mac_ = defaultMac_;
+	multicast_.clear();
+	allMulticast_ = false;
+	for (size_t i = 0; i < kEthRxQueueFrames + 1 && eth_->peekSize(); i++)
+		eth_->receive(std::span<uint8_t>(buf_.data(), kEthMaxFrame));
+	SCSI_LOG("dayna: reset");
 }
 
 void DaynaPortTarget::abort()
 {
+	loseInFlight();
 	length_ = 0;
 	writeHeader_ = false;
 }
