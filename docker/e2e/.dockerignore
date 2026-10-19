@@ -1,0 +1,12 @@
+# Applied to the staged context root (test/e2e/run.sh copies this file there).
+# The stage is already a filtered copy; this is the second fence.
+**/.git
+**/bld
+**/build
+**/*.hfs
+**/*.dsk
+**/*.img
+**/*.rom
+**/*.ROM
+**/*.sit
+**/*.bin
