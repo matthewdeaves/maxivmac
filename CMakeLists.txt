@@ -397,6 +397,7 @@ add_executable(tests
     src/debugger/script_paths.cpp
     test/test_script_mouse.cpp
     test/test_script_paths.cpp
+    test/test_slirp_timers.cpp
     src/storage/appledouble.cpp
     src/storage/filename_encoding.cpp
     src/storage/text_convert.cpp

@@ -38,37 +38,23 @@ static int64_t cb_clock_get_ns(void * /*opaque*/)
 	return duration_cast<nanoseconds>(steady_clock::now().time_since_epoch()).count();
 }
 
-/* Timer support — we use the v4 timer_new_opaque interface.
-   libslirp only creates a small number of timers (typically 1 for RA).
-   We store the expiry time and fire them during poll(). */
-struct SlirpTimer
-{
-	SlirpTimerId id;
-	void *cb_opaque;
-	int64_t expire_ms; /* -1 = inactive */
-	Slirp *slirp;
-};
-
+/* Timer support — the v4 timer_new_opaque interface.  libslirp never fires
+   its timers itself: they live in a SlirpTimers table and poll() calls
+   slirp_handle_timer() for the due ones.  timer_mod takes an expiry in
+   milliseconds on the clock that clock_get_ns() reports in nanoseconds. */
 static void *cb_timer_new_opaque(SlirpTimerId id, void *cb_opaque, void *opaque)
 {
-	(void)opaque;
-	auto *t = new SlirpTimer;
-	t->id = id;
-	t->cb_opaque = cb_opaque;
-	t->expire_ms = -1;
-	t->slirp = nullptr; /* set in init_completed */
-	return t;
+	return static_cast<SlirpStack *>(opaque)->timers().add(int(id), cb_opaque);
 }
 
-static void cb_timer_free(void *timer, void * /*opaque*/)
+static void cb_timer_free(void *timer, void *opaque)
 {
-	delete static_cast<SlirpTimer *>(timer);
+	static_cast<SlirpStack *>(opaque)->timers().remove(static_cast<SlirpTimers::Timer *>(timer));
 }
 
 static void cb_timer_mod(void *timer, int64_t expire_time, void * /*opaque*/)
 {
-	auto *t = static_cast<SlirpTimer *>(timer);
-	t->expire_ms = expire_time;
+	SlirpTimers::arm(static_cast<SlirpTimers::Timer *>(timer), expire_time);
 }
 
 static void cb_register_poll_socket(slirp_os_socket /*fd*/, void * /*opaque*/)
@@ -231,6 +217,11 @@ void SlirpStack::poll()
 
 	/* Phase 3: tell libslirp what happened */
 	slirp_pollfds_poll(slirp_, (ret < 0) ? 1 : 0, cb_get_revents, &pollFds_);
+
+	/* Phase 4: fire the timers that have come due (retransmit, ARP, ...) */
+	timers_.fireDue(cb_clock_get_ns(nullptr) / 1000000, [this](int id, void *cbOpaque) {
+		slirp_handle_timer(slirp_, static_cast<SlirpTimerId>(id), cbOpaque);
+	});
 }
 
 bool SlirpStack::addHostFwd(bool isUDP, uint16_t hostPort, const char *guestIP,

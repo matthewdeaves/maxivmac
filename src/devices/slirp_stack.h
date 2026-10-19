@@ -2,8 +2,8 @@
 	slirp_stack.h — thin C++ wrapper around libslirp, shared by the SLIP
 	serial backend (serial_slirp) and the Ethernet backend (eth_slirp).
 
-	It owns the Slirp instance, the libslirp callbacks, the (minimal) timer
-	objects and the non-blocking poll loop.  Frames go in with input() and
+	It owns the Slirp instance, the libslirp callbacks, the timer table
+	(fired from poll()) and the non-blocking poll loop.  Frames go in with input() and
 	come out through the output callback given at construction.  All the
 	addressing lives in one Config so nothing is hard-coded elsewhere.
 
@@ -24,6 +24,8 @@
 #include <libslirp.h>
 #include <string>
 #include <vector>
+
+#include "devices/slirp_timers.h"
 
 class SlirpStack
 {
@@ -65,6 +67,9 @@ public:
 	/* Host -> guest port forward (TCP or UDP); guestIP "" = config().guest. */
 	bool addHostFwd(bool isUDP, uint16_t hostPort, const char *guestIP, uint16_t guestPort);
 
+	/* libslirp's timer table (fired from poll()). */
+	SlirpTimers &timers() { return timers_; }
+
 	/* libslirp callback trampoline. */
 	void onOutput(const uint8_t *pkt, size_t len)
 	{
@@ -83,6 +88,7 @@ private:
 	OutputFn out_;
 	Slirp *slirp_ = nullptr;
 	std::vector<PollEntry> pollFds_;
+	SlirpTimers timers_;
 };
 
 #endif /* HAVE_SLIRP */
