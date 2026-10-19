@@ -38,3 +38,5 @@ macsrc/init/version.h
 macsrc/init/build.dbg
 debug_mouse.dbg
 data/disks/
+/tools/ethhub/ethhub
+/tools/ethhub/ethhub.dSYM
