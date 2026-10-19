@@ -122,6 +122,7 @@ set(MINIVMAC_SOURCES
     src/devices/rom.cpp
     src/devices/scsi.cpp
     src/devices/scsi_daynaport.cpp
+    src/devices/scsi_factory.cpp
     src/devices/eth_spec.cpp
     src/devices/eth_factory.cpp
     src/devices/ncr5380.cpp
@@ -436,6 +437,8 @@ add_executable(tests
     test/test_daynaport.cpp
     src/devices/eth_spec.cpp
     src/devices/eth_factory.cpp
+    src/devices/scsi_factory.cpp
+    test/test_scsi_factory.cpp
     test/test_eth_spec.cpp
 )
 target_include_directories(tests PRIVATE "${CMAKE_SOURCE_DIR}/src" "${CMAKE_SOURCE_DIR}/libs" "${CMAKE_SOURCE_DIR}/libs/stb" "${CMAKE_SOURCE_DIR}/tools/icon_extract")

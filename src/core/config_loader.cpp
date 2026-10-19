@@ -173,7 +173,15 @@ void PrintUsage(const char *progname)
 			"  --max-instructions=N   Instruction budget (default: 20000000)\n"
 			"  --serial-a=MODE  Modem port backend: loopback, file:tx=PATH[,rx=PATH], pty, slip\n"
 			"  --serial-b=MODE  Printer port backend (same modes as --serial-a)\n"
-			"  --slip-redir=SPEC  Port forward: tcp:hostport:guestip:guestport\n"
+			"  --scsiN=TYPE     Attach a SCSI target at ID N (0-6): daynaport[,multiframe], none\n"
+			"                   (compact Macs only; refused on the Mac II family)\n"
+			"  --eth=SPEC       Ethernet backend for a DaynaPORT: slirp[,hostfwd=tcp:[HOSTIP]:HOSTPORT-GUESTIP:GUESTPORT], none\n"
+			"                   Default: slirp interactively; none (cable out) with --headless or\n"
+			"                   --dbg-script, so scripted runs stay repeatable.  Give --eth=slirp for\n"
+			"                   a live link there.  Forwards listen on 127.0.0.1 unless HOSTIP is given.\n"
+			"  --eth-mac=MAC    DaynaPORT MAC address (default 02:6d:78:76:6d:01)\n"
+			"  --net-redir=SPEC Port forward for slirp (SLIP or --eth): tcp:hostport:guestip:guestport\n"
+			"                   (--slip-redir is an alias)\n"
 			"  --shared=PATH    Mount host directory as shared drive (repeatable)\n"
 			"  -h, --help       Show this help\n"
 			"\n"
@@ -364,9 +372,29 @@ LaunchConfig ParseCommandLine(int argc, char *argv[])
 			lc.serialB = arg + 11;
 			continue;
 		}
-		if (strncmp(arg, "--slip-redir=", 13) == 0)
+		if (strncmp(arg, "--net-redir=", 12) == 0)
 		{
-			lc.slipRedirs.push_back(arg + 13);
+			lc.netRedirs.push_back(arg + 12);
+			continue;
+		}
+		if (strncmp(arg, "--slip-redir=", 13) == 0) // former name of --net-redir
+		{
+			lc.netRedirs.push_back(arg + 13);
+			continue;
+		}
+		if (strncmp(arg, "--eth=", 6) == 0)
+		{
+			lc.eth = arg + 6;
+			continue;
+		}
+		if (strncmp(arg, "--eth-mac=", 10) == 0)
+		{
+			lc.ethMac = arg + 10;
+			continue;
+		}
+		if (strncmp(arg, "--scsi", 6) == 0 && arg[6] >= '0' && arg[6] <= '6' && arg[7] == '=')
+		{
+			lc.scsiTargets[arg[6] - '0'] = arg + 8;
 			continue;
 		}
 		if (strncmp(arg, "--shared=", 9) == 0)
@@ -656,6 +684,10 @@ LaunchConfig LaunchConfigFromMacEntry(const MacFileEntry &entry, std::string_vie
 	lc.screenH = entry.screenH;
 	lc.screenDepth = entry.screenDepth;
 	lc.serialA = entry.serialA;
+	lc.scsiTargets = entry.scsiTargets;
+	lc.eth = entry.eth;
+	lc.ethMac = entry.ethMac;
+	lc.netRedirs = entry.netRedirs;
 
 	if (entry.speed >= 0) lc.speed = entry.speed;
 

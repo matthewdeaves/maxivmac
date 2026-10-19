@@ -25,6 +25,9 @@ public:
 	void attachTarget(int id, std::unique_ptr<scsi::ScsiTarget> target);
 	scsi::ScsiTarget *target(int id) const;
 
+	// Once per emulated 1/60 s tick: lets targets pump host I/O.
+	void tick();
+
 	// Pulse VIA2 CA2 (IRQ) or CB2 (DRQ); Mac II family only.
 	void pulseVia2(bool irq);
 

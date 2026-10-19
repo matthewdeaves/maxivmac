@@ -26,6 +26,9 @@
 #include <filesystem>
 #include "devices/scc.h"
 #include "devices/serial_factory.h"
+#include "devices/eth_spec.h"
+#include "devices/scsi.h"
+#include "devices/scsi_factory.h"
 #include "platform/sdl_sound.h"
 #if HAVE_SLIRP
 #include "devices/serial_slirp.h"
@@ -36,9 +39,10 @@
 #include <cstring>
 #include <string>
 
-/* Apply --slip-redir= specs to a backend (only if it's a SlirpBackend).
+/* Apply --net-redir= (alias --slip-redir=) specs to a serial backend (only if
+   it's a SlirpBackend).  --eth=slirp applies them itself in CreateEthBackend.
    Spec format: "tcp:hostport:guestip:guestport" or "udp:..." */
-static void ApplySlipRedirs(SerialBackend *backend, const std::vector<std::string> &redirs)
+static void ApplyNetRedirs(SerialBackend *backend, const std::vector<std::string> &redirs)
 {
 #if HAVE_SLIRP
 	if (redirs.empty()) return;
@@ -47,33 +51,13 @@ static void ApplySlipRedirs(SerialBackend *backend, const std::vector<std::strin
 
 	for (const auto &spec : redirs)
 	{
-		/* Parse "tcp:hostport:guestip:guestport" */
-		bool isUDP = false;
-		const char *s = spec.c_str();
-		if (strncmp(s, "tcp:", 4) == 0)
-			s += 4;
-		else if (strncmp(s, "udp:", 4) == 0)
+		HostFwdSpec f;
+		if (!parseNetRedir(spec, f))
 		{
-			isUDP = true;
-			s += 4;
-		}
-		else
-		{
-			fprintf(stderr, "[NET] bad --slip-redir spec: %s\n", spec.c_str());
+			fprintf(stderr, "[NET] bad --net-redir spec: %s\n", spec.c_str());
 			continue;
 		}
-
-		/* hostport:guestip:guestport */
-		unsigned hostPort = 0, guestPort = 0;
-		char guestIP[64] = {};
-		if (sscanf(s, "%u:%63[^:]:%u", &hostPort, guestIP, &guestPort) != 3)
-		{
-			fprintf(stderr, "[NET] bad --slip-redir spec: %s\n", spec.c_str());
-			continue;
-		}
-
-		slirp->addHostFwd(isUDP, static_cast<uint16_t>(hostPort), guestIP,
-						  static_cast<uint16_t>(guestPort));
+		slirp->addHostFwd(f.udp, f.hostPort, f.guestIp.c_str(), f.guestPort);
 	}
 #else
 	(void)backend;
@@ -320,13 +304,43 @@ bool EmulatorShell::initMachine()
 			{
 				auto *raw = b.get();
 				scc->setBackend(0, std::move(b));
-				ApplySlipRedirs(raw, slc.slipRedirs);
+				ApplyNetRedirs(raw, slc.netRedirs);
 			}
 			if (auto b = CreateSerialBackend(slc.serialB, 1))
 			{
 				auto *raw = b.get();
 				scc->setBackend(1, std::move(b));
-				ApplySlipRedirs(raw, slc.slipRedirs);
+				ApplyNetRedirs(raw, slc.netRedirs);
+			}
+		}
+	}
+
+	/* Attach SCSI targets from --scsiN= options (e.g. a DaynaPORT adapter). */
+	{
+		const LaunchConfig &slc = GetLaunchConfig();
+		if (auto *scsi = g_rig->findDevice<SCSIDevice>())
+		{
+			ScsiTargetOptions opt;
+			opt.eth = slc.eth;
+			opt.redirs = slc.netRedirs;
+			opt.ethMac = slc.ethMac;
+			opt.unattended = slc.headless || !slc.dbgScripts.empty();
+			for (int id = 0; id < 7; ++id)
+			{
+				if (slc.scsiTargets[id].empty() || slc.scsiTargets[id] == "none") continue;
+				if (g_rig->config().isIIFamily())
+				{
+					/* The II family's pseudo-DMA uses separate handshake regions and
+					   /DACK (A9) is not decoded there, so a driver could not transfer
+					   data.  Say so instead of attaching a target that cannot work. */
+					fprintf(stderr,
+							"[SCSI] ID %d: --scsi%d=%s is not supported on the Mac II family "
+							"(no pseudo-DMA /DACK decode); not attached\n",
+							id, id, slc.scsiTargets[id].c_str());
+					continue;
+				}
+				if (auto t = CreateScsiTarget(slc.scsiTargets[id], id, opt))
+					scsi->attachTarget(id, std::move(t));
 			}
 		}
 	}

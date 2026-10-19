@@ -8,6 +8,7 @@
 #pragma once
 
 #include "core/machine_config.h"
+#include <array>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -32,6 +33,12 @@ struct MacFileEntry
 
 	// Serial
 	std::string serialA;
+
+	// SCSI targets (ID 0..6: "daynaport" or empty) and Ethernet
+	std::array<std::string, 7> scsiTargets;
+	std::string eth;
+	std::string ethMac;
+	std::vector<std::string> netRedirs;
 
 	// Icon (optional PNG path, resolved after validation)
 	std::string iconPath;

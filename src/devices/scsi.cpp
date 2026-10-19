@@ -50,6 +50,12 @@ scsi::ScsiTarget *SCSIDevice::target(int id) const
 	return (id < 0 || id > 6) ? nullptr : targets_[id].get();
 }
 
+void SCSIDevice::tick()
+{
+	for (auto &t : targets_)
+		if (t) t->tick();
+}
+
 void SCSIDevice::reset()
 {
 	bus_.reset();

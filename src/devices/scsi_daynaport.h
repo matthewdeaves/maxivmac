@@ -70,6 +70,7 @@ public:
 
 	EthernetBackend &backend() { return *eth_; }
 	const Mac &mac() const { return mac_; }
+	const Options &options() const { return opt_; }
 	const std::vector<Mac> &multicast() const { return multicast_; }
 
 private:
