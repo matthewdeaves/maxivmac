@@ -64,6 +64,7 @@ void CmdShowtext(Debugger &dbg, const std::vector<Token> &args);
 void CmdScreenshot(Debugger &dbg, const std::vector<Token> &args);
 void CmdWait(Debugger &dbg, const std::vector<Token> &args);
 void CmdFail(Debugger &dbg, const std::vector<Token> &args);
+void CmdTimeout(Debugger &dbg, const std::vector<Token> &args);
 void CmdType(Debugger &dbg, const std::vector<Token> &args);
 void CmdKey(Debugger &dbg, const std::vector<Token> &args);
 void CmdClearKeys(Debugger &dbg, const std::vector<Token> &args);
@@ -205,11 +206,16 @@ static CmdEntry s_commands[] = {
 	{"wait", "", CmdWait, "Wait for condition",
 	 "wait text \"pattern\" [timeout]\n  Resume until text appears (script suspends).\n"
 	 "wait screen \"ref.png\" [timeout] [pct]\n  Resume until screen matches reference.\n"
-	 "wait for <duration>\n  Resume for a fixed number of cycles.\n"
+	 "wait for <duration>\n  Resume for a fixed amount of emulated time (5s, 500ms, raw units).\n"
 	 "wait off [timeout]\n  Resume until guest power-off.\n"
 	 "wait <addr|symbol> [timeout]\n  Resume until address is reached.\n"
 	 "wait trap <name> [timeout]\n  Resume until trap fires.\n"
-	 "  Timeout accepts: raw cycles, 5s, 500ms, 1M, 100k, off\n",
+	 "  Timeout accepts: 5s, 500ms (emulated time), 1M, 100k, raw scheduler units, off.\n"
+	 "  Default: 'set default-timeout' (60s). A timeout exits the emulator with status 1.\n",
+	 "Scripting"},
+	{"timeout", "", CmdTimeout, "Set default wait timeout",
+	 "timeout <duration>\n  Same as 'set default-timeout'. Accepts 5s, 500ms, 1M, 100k, off, or raw\n"
+	 "  scheduler units (1/64 CPU cycle; 501,350,400 per emulated second on a Plus).\n",
 	 "Scripting"},
 	{"fail", "", CmdFail, "Abort with error",
 	 "fail [\"message\"]\n  Print error, save screenshot, exit with code 1.\n",

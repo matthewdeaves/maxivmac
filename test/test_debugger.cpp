@@ -654,7 +654,9 @@ TEST_CASE("settings init and get uint64")
 	SettingsInit();
 	uint64_t v = 0;
 	CHECK(SettingGetUInt64("default-timeout", v));
-	CHECK(v == 40'000'000);
+	CHECK(v == kDefaultScriptTimeoutUnits);
+	/* 60 s of emulated time at the Plus clock (7,833,600 Hz, 64 units/cycle) */
+	CHECK(v == 60ull * 7'833'600ull * 64);
 }
 
 TEST_CASE("settings set and get uint64")
@@ -682,7 +684,7 @@ TEST_CASE("settings format uint64")
 	SettingsInit();
 	std::string out;
 	CHECK(SettingFormat("default-timeout", out));
-	CHECK(out == "40000000");
+	CHECK(out == std::to_string(kDefaultScriptTimeoutUnits));
 }
 
 TEST_CASE("settings unknown name returns false")
@@ -784,4 +786,82 @@ TEST_CASE("duration format M suffix")
 TEST_CASE("duration format off")
 {
 	CHECK(FormatDuration(0, 8'000'000) == "off");
+}
+
+TEST_CASE("duration tokens: number + unit word")
+{
+	const uint64_t hz = 1000;
+	uint64_t out = 99;
+	size_t used = 0;
+
+	auto toks = Tokenize("wait for 20s");
+	// toks: wait for 20 s <end>
+	std::vector<Token> args(toks.begin() + 2, toks.end());
+	REQUIRE(ParseDurationTokens(args, 0, hz, out, used));
+	CHECK(out == 20'000);
+	CHECK(used == 2);
+
+	args = Tokenize("500ms");
+	REQUIRE(ParseDurationTokens(args, 0, hz, out, used));
+	CHECK(out == 500);
+	CHECK(used == 2);
+
+	args = Tokenize("3 M");
+	REQUIRE(ParseDurationTokens(args, 0, hz, out, used));
+	CHECK(out == 3'000'000);
+
+	args = Tokenize("7k");
+	REQUIRE(ParseDurationTokens(args, 0, hz, out, used));
+	CHECK(out == 7'000);
+}
+
+TEST_CASE("duration tokens: bare number, off, errors")
+{
+	uint64_t out = 99;
+	size_t used = 0;
+
+	auto args = Tokenize("12345");
+	REQUIRE(ParseDurationTokens(args, 0, 1000, out, used));
+	CHECK(out == 12345);
+	CHECK(used == 1);
+
+	args = Tokenize("$10");
+	REQUIRE(ParseDurationTokens(args, 0, 1000, out, used));
+	CHECK(out == 0x10);
+
+	args = Tokenize("off");
+	REQUIRE(ParseDurationTokens(args, 0, 1000, out, used));
+	CHECK(out == 0);
+
+	/* a non-unit word after the number is not consumed */
+	args = Tokenize("5 foo");
+	REQUIRE(ParseDurationTokens(args, 0, 1000, out, used));
+	CHECK(out == 5);
+	CHECK(used == 1);
+
+	args = Tokenize("\"x\"");
+	CHECK_FALSE(ParseDurationTokens(args, 0, 1000, out, used));
+	args = Tokenize("");
+	CHECK_FALSE(ParseDurationTokens(args, 0, 1000, out, used));
+	CHECK_FALSE(ParseDurationTokens(args, 5, 1000, out, used));
+}
+
+TEST_CASE("hyphenated setting names are rejoined")
+{
+	size_t n = 0;
+	auto toks = Tokenize("default-timeout 10s");
+	CHECK(JoinHyphenatedName(toks, n) == "default-timeout");
+	CHECK(n == 3);
+
+	toks = Tokenize("confirm on");
+	CHECK(JoinHyphenatedName(toks, n) == "confirm");
+	CHECK(n == 1);
+
+	toks = Tokenize("a-b-c 1");
+	CHECK(JoinHyphenatedName(toks, n) == "a-b-c");
+	CHECK(n == 5);
+
+	toks = Tokenize("5");
+	CHECK(JoinHyphenatedName(toks, n).empty());
+	CHECK(n == 0);
 }

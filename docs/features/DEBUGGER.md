@@ -440,16 +440,16 @@ Settings are managed with `set <name> <value>` and `show [<name>]`:
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| `default-timeout` | duration | 40000000 | Default cycle budget for `wait` (0 = infinite) |
+| `default-timeout` | duration | 60s | Default timeout for `wait` (0/`off` = infinite) |
 | `confirm` | bool | off | Require y/n for destructive commands (e.g. `delete` all) |
 
 ```
 (dbg) set default-timeout 10s
-default-timeout = 80000000
+default-timeout = 5013504000
 (dbg) set confirm on
 confirm = on
 (dbg) show
-default-timeout      = 80000000    Default cycle budget for 'wait' commands (0 = infinite)
+default-timeout      = 5013504000  Default timeout for 'wait' commands: 5s, 500ms, raw scheduler units, or off (= infinite)
 confirm              = on          Require y/n confirmation for destructive commands
 ```
 
@@ -677,7 +677,7 @@ inter-key delays (~20ms at 8 MHz emulated speed).
 |---------|-------------|
 | `wait text "pattern" [timeout]` | Suspend script until captured text contains pattern |
 | `wait screen "ref.png" [timeout] [pct]` | Suspend script until screen matches reference |
-| `wait for <duration>` | Suspend script for N emulated CPU cycles |
+| `wait for <duration>` | Suspend script for a fixed amount of emulated time |
 | `wait off [timeout]` | Suspend script until guest power-off |
 | `wait <addr\|symbol> [timeout]` | Suspend script until address is reached |
 | `wait trap <name> [timeout]` | Suspend script until trap fires |
@@ -685,11 +685,15 @@ inter-key delays (~20ms at 8 MHz emulated speed).
 
 Timeout and duration values accept human-readable formats:
 - `5s` — 5 seconds of emulated time
-- `500ms` — 500 milliseconds
-- `5M` — 5 million cycles
-- `100k` — 100 thousand cycles
-- `40000000` — raw cycle count
+- `500ms` — 500 milliseconds of emulated time
+- `5M` — 5 million raw scheduler units
+- `100k` — 100 thousand raw scheduler units
+- `40000000` — raw scheduler units
 - `off` / `none` — no timeout (infinite)
+
+A scheduler unit is 1/64 of a 68000 clock cycle; a Mac Plus runs
+501,350,400 of them per emulated second.  See
+[SCRIPTING.md](SCRIPTING.md#time-units).
 
 ```
 (dbg) set default-timeout 10s

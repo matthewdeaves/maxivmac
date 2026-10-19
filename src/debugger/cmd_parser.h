@@ -46,6 +46,11 @@ inline bool ParseNumber(std::string_view text, uint32_t &outVal)
 	return true;
 }
 
+// Join a leading hyphenated name ("default-timeout") that the tokenizer split
+// into Word, Operator(-), Word...  Starts at args[0]; returns the joined name
+// and sets `count` to the number of tokens it spans (0 if args[0] is not a word).
+std::string JoinHyphenatedName(const std::vector<Token> &args, size_t &count);
+
 class Debugger; // forward
 
 struct CmdEntry

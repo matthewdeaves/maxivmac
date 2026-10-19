@@ -70,6 +70,21 @@ bool ParseNumber(std::string_view text, uint64_t &outVal)
 	return true;
 }
 
+std::string JoinHyphenatedName(const std::vector<Token> &args, size_t &count)
+{
+	count = 0;
+	if (args.empty() || !args[0].isWord()) return {};
+	std::string name = args[0].text;
+	count = 1;
+	while (count + 1 < args.size() && args[count].isOperator("-") && args[count + 1].isWord())
+	{
+		name += '-';
+		name += args[count + 1].text;
+		count += 2;
+	}
+	return name;
+}
+
 std::vector<Token> Tokenize(std::string_view line)
 {
 	std::vector<Token> tokens;

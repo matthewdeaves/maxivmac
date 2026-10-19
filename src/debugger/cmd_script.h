@@ -9,5 +9,13 @@ using ScaledCycleCount = uint64_t;
 // Called from the tick handler (60 Hz).
 void CheckScriptTimeouts();
 
-// Get/set the default timeout budget for wait commands.
+// Scheduler units per second of emulated time for the running machine.
+// One unit is 1/kCycleScale (1/64) of a 68000 clock cycle, so a Mac Plus
+// (7.8336 MHz) runs 501,350,400 units per emulated second.  All raw
+// numbers in script commands (wait budgets, `set default-timeout`) are in
+// these units; "5s" / "500ms" suffixes are converted with this rate.
+uint64_t ScriptUnitsPerSecond();
+
+// Default timeout budget for wait commands, in scheduler units
+// (setting "default-timeout"; 0 = infinite).
 ScaledCycleCount ScriptDefaultTimeout();

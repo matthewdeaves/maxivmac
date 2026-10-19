@@ -1,5 +1,5 @@
 # Boot Mac Plus to Finder desktop, verify it arrives.
-set default-timeout 80000000
+set default-timeout 120s
 showtext on
 wait text "File"
 screenshot "desktop"

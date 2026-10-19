@@ -37,9 +37,7 @@ void ScriptCaptureText(std::string_view utf8Text, std::string_view trapName)
 		if (bp.kind != Debugger::Breakpoint::Kind::Text) continue;
 		if (!bp.enabled) continue;
 
-		// Timeout check
-		if (bp.timeoutAt != 0 && g_instructionCount >= bp.timeoutAt)
-			continue; // expired — will be cleaned up by timeout handler
+		// (Timeouts are enforced by CheckScriptTimeouts(), once per tick.)
 
 		// Substring match
 		if (utf8Text.find(bp.textPattern) == std::string_view::npos) continue;
