@@ -129,7 +129,7 @@ crosscheck_ptlog() {  # crosscheck_ptlog RUNDIR : read PT_Log back from the disk
     local d="$1" gz="$1/disk-after.hfs.gz" ok=false detail
     [ -f "$gz" ] || return 0
     [ -f "$d/summary.json" ] || return 0
-    grep -q '"rung": "r1"' "$d/summary.json" && return 0     # r1 runs no PeerTalk app
+    grep -q '"rung": "r\(2\|2b\|3\|3b\)"' "$d/summary.json" || return 0   # only the test_mesh rungs write PT_test_mesh
     if ! { command -v hmount >/dev/null 2>&1 && command -v hcopy >/dev/null 2>&1; }; then
         json_note "$d/summary.json" not_verified "PT_Log cross-check: hfsutils (hmount/hcopy) not on the host (set MAXIVMAC_HFSUTILS)"
         return 0

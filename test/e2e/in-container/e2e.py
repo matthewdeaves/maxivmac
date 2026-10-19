@@ -332,12 +332,18 @@ class Run:
         synack = [d for d in frames if d.get("proto") == 6 and d["tcp_flags"] & 0x12 == 0x12
                   and {d["ip_src"], d["ip_dst"]} == {gip, tip}]
         tuples = {(d["ip_src"], d["sport"], d["ip_dst"], d["dport"]) for d in syn}
+        # a connection is established when its SYN was answered by a SYN-ACK of the reversed tuple
+        answered = {(d["ip_dst"], d["dport"], d["ip_src"], d["sport"]) for d in synack}
+        established = tuples & answered
+        unanswered = tuples - answered
         initiators = {socket.inet_ntoa(t[0]) for t in tuples}
-        self.facts.update(tcp_syn_segments=len(syn), tcp_connections=len(tuples), tcp_synack=len(synack),
-                          initiators=sorted(initiators))
-        self.check("one_tcp_connection", len(tuples) == 1 and len(synack) >= 1,
-                   "%d distinct SYN 4-tuples (%d segments), %d SYN-ACK; initiator(s): %s"
-                   % (len(tuples), len(syn), len(synack), ",".join(sorted(initiators)) or "none"))
+        self.facts.update(tcp_syn_segments=len(syn), tcp_connections_established=len(established),
+                          tcp_unanswered_syn_tuples=len(unanswered), initiators=sorted(initiators))
+        # test_mesh redials after a disconnect, so SYNs that nobody answers can follow the
+        # guest's exit at the end of the run; they are counted, not failed.
+        self.check("one_tcp_connection", len(established) == 1,
+                   "%d established connection(s) (SYN answered by SYN-ACK), %d later unanswered SYN(s) (test_mesh redials after the guest quits); SYN sent by: %s"
+                   % (len(established), len(unanswered), ",".join(sorted(initiators)) or "nobody"))
         # who should dial: the lower address compared as network-order bytes (PT_ShouldInitiate)
         lower = ga if gip < tip else ta
         le = lambda b: struct.unpack("<I", b)[0]
@@ -346,7 +352,7 @@ class Run:
             "bytewise_lower": lower,
             "little_endian_peer_thinks_lower": ga if le(gip) < le(tip) else ta,
             "big_endian_mac_thinks_lower": ga if be(gip) < be(tip) else ta}
-        self.check("initiator_is_designated", initiators == {lower},
+        self.check("initiator_is_designated", initiators == {lower} and len(established) == 1,
                    "SYN from %s; bytewise-lower address is %s (peer reads it as LE: %s lower, Mac as BE: %s lower)"
                    % (",".join(sorted(initiators)) or "nobody", lower,
                       self.facts["native_int_rank"]["little_endian_peer_thinks_lower"],
