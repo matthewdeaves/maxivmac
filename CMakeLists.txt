@@ -302,6 +302,10 @@ if(MAXIVMAC_SANITIZE)
         -fsanitize=address,undefined -fno-omit-frame-pointer)
     target_link_options(maxivmac PRIVATE
         -fsanitize=address,undefined)
+    # Also every target defined below (tests, eth-hub-it, icon-extract, ad2bin, imgutil, ethhub):
+    # `ctest` under the macos-asan preset otherwise runs the unit tests unsanitized.
+    add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=address,undefined)
 endif()
 
 # ---------------------------------------------------------------------------
