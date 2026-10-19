@@ -9,6 +9,7 @@
 
 #include "core/machine_config.h"
 #include "core/emulator_config.h"
+#include <array>
 #include <string>
 #include <vector>
 
@@ -48,8 +49,13 @@ struct LaunchConfig
 	std::string serialA; // --serial-a=MODE (modem port, SCC channel A)
 	std::string serialB; // --serial-b=MODE (printer port, SCC channel B)
 
-	// Networking (SLIP)
-	std::vector<std::string> slipRedirs; // --slip-redir=tcp:hostport:guestip:guestport
+	// Networking: host port forwards for any slirp backend (SLIP serial or --eth=slirp)
+	std::vector<std::string> netRedirs; // --net-redir=tcp:hostport:guestip:guestport (alias --slip-redir)
+
+	// SCSI targets and Ethernet
+	std::array<std::string, 7> scsiTargets; // --scsiN=daynaport|none (N = SCSI ID 0..6)
+	std::string eth;						// --eth=slirp[,hostfwd=tcp::HOSTPORT-GUESTIP:GUESTPORT]
+	std::string ethMac;						// --eth-mac=xx:xx:xx:xx:xx:xx
 
 	// Shared drives
 	std::vector<std::string> sharedDirs; // --shared <path> (repeatable)

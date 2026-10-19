@@ -261,6 +261,22 @@ bool ParseMacFileFromString(std::string_view content, std::string_view path, Mac
 		{
 			out.serialA = std::string(val);
 		}
+		else if (key.size() == 5 && key.substr(0, 4) == "scsi" && key[4] >= '0' && key[4] <= '6')
+		{
+			out.scsiTargets[key[4] - '0'] = std::string(val);
+		}
+		else if (key == "eth")
+		{
+			out.eth = std::string(val);
+		}
+		else if (key == "eth-mac")
+		{
+			out.ethMac = std::string(val);
+		}
+		else if (key == "net-redir")
+		{
+			out.netRedirs.push_back(std::string(val));
+		}
 		else if (key == "ram")
 		{
 			out.ramOverrideMB = parseRamSpec(val, errorOut);
