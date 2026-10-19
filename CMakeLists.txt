@@ -426,6 +426,7 @@ add_executable(tests
     test/test_stb_image_impl.cpp
     src/devices/ncr5380.cpp
     test/test_ncr5380.cpp
+    test/test_eth.cpp
 )
 target_include_directories(tests PRIVATE "${CMAKE_SOURCE_DIR}/src" "${CMAKE_SOURCE_DIR}/libs" "${CMAKE_SOURCE_DIR}/libs/stb" "${CMAKE_SOURCE_DIR}/tools/icon_extract")
 target_compile_options(tests PRIVATE -Wall -Wextra -Werror -UNDEBUG)
