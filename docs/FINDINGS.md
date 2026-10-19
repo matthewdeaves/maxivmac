@@ -224,7 +224,7 @@ the branch that found them.
 
 - Two DaynaPORTs each get their own slirp (same guest address, same forwards);
   documented, not detected.
-- The `--eth=hub` backend (join an ethhub from the emulator) is a separate task.
+- The `--eth=hub` backend (join an ethhub from the emulator) was a separate task: now F23.
 - The MacTCP ping end to end was run on the pre-review `integration` build by
   a different task; the defaults changed here (one frame per READ, `none` in
   headless runs) were checked with unit tests, golden files and the script
@@ -259,3 +259,13 @@ the branch that found them.
   time on the emulated clock (`--eth-latency`, default 2 ms; `EthLatency`).
   See `docs/features/NETWORKING_DAYNAPORT.md`. Whether 2 ms is enough for
   other MacTCP clients is not known; `--eth-latency=` raises it.
+
+### F23. `--eth=hub:HOST:PORT` (EthHub backend)
+
+- **Status:** added (`src/devices/eth_hub.*`). Link state is "socket open",
+  not "hub alive" (UDP). Several emulators on a hub get distinct random MACs
+  unless `--eth-mac` is given, because the default MAC is a constant and the
+  hub would otherwise confuse the emulators silently. Verified against the
+  real `ethhub` with three backends (unicast, broadcast, flooding); **not**
+  verified: a guest actually talking across a hub (two emulators, or an
+  emulator and the Docker peer), IPv6 hosts, a hub behind NAT.

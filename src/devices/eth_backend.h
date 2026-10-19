@@ -38,5 +38,8 @@ public:
 	virtual void poll() = 0;
 	// Frames dropped by the backend's receive queue (overflow) since start.
 	virtual uint64_t droppedFrames() const { return 0; }
+	// True when the backend attaches the adapter to a LAN segment that other
+	// emulators may share (a hub): the adapter then needs a MAC of its own.
+	virtual bool sharesLan() const { return false; }
 	virtual const char *name() const = 0;
 };

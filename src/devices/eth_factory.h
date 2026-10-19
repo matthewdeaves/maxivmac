@@ -1,8 +1,9 @@
 /*
 	eth_factory — create an EthernetBackend from a --eth spec string.
 
-	Kinds today: "slirp" (needs libslirp) and "none".  New kinds (e.g. a
-	hub or tap backend) register in the table in eth_factory.cpp.
+	Kinds today: "slirp" (needs libslirp), "hub:HOST:PORT" (an ethhub LAN,
+	POSIX) and "none".  New kinds (e.g. a tap backend) register in the table
+	in eth_factory.cpp.
 */
 #pragma once
 

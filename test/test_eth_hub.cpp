@@ -1,0 +1,289 @@
+// EthHub against a loopback UDP "fake hub" bound to an ephemeral port.
+#if HAVE_ETH_HUB
+#include <doctest/doctest.h>
+
+#include <arpa/inet.h>
+#include <fcntl.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
+#include <chrono>
+#include <thread>
+
+#include "devices/eth_hub.h"
+#include "devices/eth_factory.h"
+#include "devices/scsi_daynaport.h"
+#include "devices/scsi_factory.h"
+#include "eth_fake.h"
+
+namespace
+{
+// A UDP socket on 127.0.0.1:<ephemeral>, standing in for ethhub.
+struct FakeHub
+{
+	int fd = -1;
+	uint16_t port = 0;
+	sockaddr_in lastFrom{};
+
+	FakeHub()
+	{
+		fd = ::socket(AF_INET, SOCK_DGRAM, 0);
+		REQUIRE(fd >= 0);
+		sockaddr_in a{};
+		a.sin_family = AF_INET;
+		a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+		REQUIRE(::bind(fd, reinterpret_cast<sockaddr *>(&a), sizeof a) == 0);
+		socklen_t l = sizeof a;
+		REQUIRE(::getsockname(fd, reinterpret_cast<sockaddr *>(&a), &l) == 0);
+		port = ntohs(a.sin_port);
+		fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
+	}
+	~FakeHub() { if (fd >= 0) ::close(fd); }
+	std::string spec() const { return "127.0.0.1:" + std::to_string(port); }
+
+	// Next datagram, waiting up to ~1 s (loopback delivery is immediate, but be patient).
+	bool recv(std::vector<uint8_t> &out)
+	{
+		uint8_t buf[4096];
+		for (int i = 0; i < 200; i++)
+		{
+			socklen_t l = sizeof lastFrom;
+			const ssize_t n = ::recvfrom(fd, buf, sizeof buf, 0, reinterpret_cast<sockaddr *>(&lastFrom), &l);
+			if (n >= 0)
+			{
+				out.assign(buf, buf + n);
+				return true;
+			}
+			std::this_thread::sleep_for(std::chrono::milliseconds(5));
+		}
+		return false;
+	}
+	void sendTo(const sockaddr_in &to, const std::vector<uint8_t> &d) const
+	{
+		::sendto(fd, d.data(), d.size(), 0, reinterpret_cast<const sockaddr *>(&to), sizeof to);
+	}
+};
+
+// Poll until the backend has a frame or ~1 s has passed.
+size_t waitFrame(EthHub &h)
+{
+	for (int i = 0; i < 200; i++)
+	{
+		h.poll();
+		if (h.peekSize()) return h.peekSize();
+		std::this_thread::sleep_for(std::chrono::milliseconds(5));
+	}
+	return 0;
+}
+
+std::unique_ptr<EthHub> make(const FakeHub &hub, EthHub::Options o = {})
+{
+	std::string err;
+	auto h = EthHub::create(hub.spec(), err, o);
+	REQUIRE_MESSAGE(h, err);
+	return h;
+}
+} // namespace
+
+TEST_CASE("eth hub: a hello (zero-length datagram) is sent at start")
+{
+	FakeHub hub;
+	auto h = make(hub);
+	CHECK(h->linkUp());
+	std::vector<uint8_t> d;
+	REQUIRE(hub.recv(d));
+	CHECK(d.empty());
+	CHECK(h->stats().hellos == 1);
+	CHECK(h->localPort() == ntohs(hub.lastFrom.sin_port));
+}
+
+TEST_CASE("eth hub: frames go out as one datagram each and bad sizes are refused")
+{
+	FakeHub hub;
+	auto h = make(hub);
+	std::vector<uint8_t> d;
+	REQUIRE(hub.recv(d)); // hello
+	const auto f = makeFrame(60, 5);
+	CHECK(h->send(f));
+	REQUIRE(hub.recv(d));
+	CHECK(d == f);
+	const auto big = makeFrame(kEthMaxFrame, 6);
+	CHECK(h->send(big));
+	REQUIRE(hub.recv(d));
+	CHECK(d.size() == kEthMaxFrame);
+	CHECK_FALSE(h->send(std::vector<uint8_t>(13, 0)));
+	CHECK_FALSE(h->send(std::vector<uint8_t>(kEthMaxFrame + 1, 0)));
+	CHECK(h->stats().txFrames == 2);
+}
+
+TEST_CASE("eth hub: frames from the hub are queued; foreign sources and bad sizes are ignored")
+{
+	FakeHub hub;
+	auto h = make(hub);
+	std::vector<uint8_t> d;
+	REQUIRE(hub.recv(d));
+	sockaddr_in client = hub.lastFrom;
+
+	hub.sendTo(client, makeFrame(80, 9));
+	REQUIRE(waitFrame(*h) == 80);
+	std::vector<uint8_t> buf(kEthMaxFrame);
+	CHECK(h->receive(buf) == 80);
+	CHECK(buf[30] == 9);
+	CHECK(h->peekSize() == 0);
+
+	hub.sendTo(client, std::vector<uint8_t>(10, 1));					 // too short
+	hub.sendTo(client, std::vector<uint8_t>(kEthMaxFrame + 1, 1));	 // too long
+	hub.sendTo(client, {});											 // a hello echoed back: not a frame
+	hub.sendTo(client, makeFrame(60, 3));								 // then a good one
+	REQUIRE(waitFrame(*h) == 60);
+	CHECK(h->stats().rxBadSize == 2);
+	CHECK(h->stats().rxFrames == 2);
+
+	// A datagram from a different socket (another port on loopback).
+	FakeHub other;
+	other.sendTo(client, makeFrame(70, 4));
+	for (int i = 0; i < 20; i++)
+	{
+		h->poll();
+		std::this_thread::sleep_for(std::chrono::milliseconds(5));
+	}
+	CHECK(h->stats().rxForeign == 1);
+	CHECK(h->receive(buf) == 60); // only the good frame from before is there
+	CHECK(h->peekSize() == 0);
+}
+
+TEST_CASE("eth hub: receive queue is bounded, drop-oldest, counted")
+{
+	FakeHub hub;
+	auto h = make(hub);
+	std::vector<uint8_t> d;
+	REQUIRE(hub.recv(d));
+	sockaddr_in client = hub.lastFrom;
+	// 100 frames in several polls (a poll reads at most 128 datagrams)
+	for (int i = 0; i < 100; i++) hub.sendTo(client, makeFrame(60, uint8_t(i)));
+	for (int i = 0; i < 100; i++)
+	{
+		h->poll();
+		std::this_thread::sleep_for(std::chrono::milliseconds(2));
+		if (h->stats().rxFrames == 100) break;
+	}
+	REQUIRE(h->stats().rxFrames == 100);
+	CHECK(h->droppedFrames() == 100 - kEthRxQueueFrames);
+	std::vector<uint8_t> buf(kEthMaxFrame);
+	REQUIRE(h->receive(buf) == 60);
+	CHECK(buf[20] == 100 - kEthRxQueueFrames); // the oldest 36 were dropped
+}
+
+TEST_CASE("eth hub: keepalive every 5 s of wall time, not of emulated time")
+{
+	FakeHub hub;
+	int64_t wall = 1000;
+	EthHub::Options o;
+	o.wallMs = [&] { return wall; };
+	auto h = make(hub, o);
+	std::vector<uint8_t> d;
+	REQUIRE(hub.recv(d)); // the start hello
+	for (int i = 0; i < 1000; i++) h->poll(); // many "ticks", no wall time passes
+	CHECK(h->stats().hellos == 1);
+	wall += 4999;
+	h->poll();
+	CHECK(h->stats().hellos == 1);
+	wall += 1;
+	h->poll();
+	CHECK(h->stats().hellos == 2);
+	REQUIRE(hub.recv(d));
+	CHECK(d.empty());
+	h->poll();
+	CHECK(h->stats().hellos == 2); // once per interval
+	wall += 5000;
+	h->poll();
+	CHECK(h->stats().hellos == 3);
+}
+
+TEST_CASE("eth hub: send never blocks when the socket buffer is full")
+{
+	// Nobody reads the fake hub, so its receive buffer fills; the sender must
+	// drop and count instead of waiting.  (Loopback UDP may also just discard
+	// at the receiver, in which case every send "succeeds"; either way this
+	// test must finish quickly.)
+	FakeHub hub;
+	auto h = make(hub);
+	const auto f = makeFrame(1500, 1);
+	const auto t0 = std::chrono::steady_clock::now();
+	for (int i = 0; i < 20000; i++) h->send(f);
+	const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+	CHECK(ms < 5000);
+	CHECK(h->stats().txFrames + h->stats().txDropped == 20000);
+}
+
+TEST_CASE("eth hub: a hub that is not there is not an error; the link stays up")
+{
+	int port;
+	{
+		FakeHub gone;
+		port = gone.port;
+	} // closed: datagrams to it are refused (ICMP) or vanish
+	std::string err;
+	auto h = EthHub::create("127.0.0.1:" + std::to_string(port), err);
+	REQUIRE(h);
+	CHECK(h->linkUp()); // UDP is connectionless: link state is not hub liveness
+	for (int i = 0; i < 50; i++)
+	{
+		h->send(makeFrame(60, 1));
+		h->poll();
+	}
+	CHECK(h->peekSize() == 0);
+	CHECK(h->linkUp());
+}
+
+TEST_CASE("eth hub: malformed specs and unresolvable hosts are refused with a message")
+{
+	std::string err;
+	for (const char *bad : {"", "localhost", ":5555", "127.0.0.1:", "127.0.0.1:0", "127.0.0.1:70000", "127.0.0.1:55x"})
+	{
+		err.clear();
+		CHECK_MESSAGE(EthHub::create(bad, err) == nullptr, bad);
+		CHECK_MESSAGE(!err.empty(), bad);
+	}
+	err.clear();
+	CHECK(EthHub::create("no-such-host.invalid:5555", err) == nullptr);
+	CHECK(err.find("resolve") != std::string::npos);
+}
+
+TEST_CASE("eth hub: the factory builds hub:HOST:PORT, falls back to no network on a bad spec")
+{
+	FakeHub hub;
+	auto b = CreateEthBackend("hub:127.0.0.1:" + std::to_string(hub.port), {});
+	REQUIRE(b);
+	CHECK(std::string(b->name()) == "hub");
+	CHECK(b->linkUp());
+	CHECK(b->sharesLan());
+	auto bad = CreateEthBackend("hub:nonsense", {});
+	REQUIRE(bad);
+	CHECK(std::string(bad->name()) == "none");
+	CHECK_FALSE(bad->sharesLan());
+}
+
+TEST_CASE("eth hub: adapters on a hub get distinct random MACs unless --eth-mac is given")
+{
+	FakeHub hub;
+	ScsiTargetOptions o;
+	o.eth = "hub:" + hub.spec();
+	auto mac = [&](const ScsiTargetOptions &opt) {
+		auto t = CreateScsiTarget("daynaport", 4, opt);
+		return dynamic_cast<DaynaPortTarget *>(t.get())->mac();
+	};
+	const auto a = mac(o), b = mac(o), c = mac(o);
+	CHECK(a != DaynaPortTarget::kDefaultMac);
+	CHECK(a != b);
+	CHECK(b != c);
+	CHECK((a[0] & 0x03) == 0x02); // locally administered, unicast
+	o.ethMac = "02:00:00:aa:bb:cc";
+	CHECK(mac(o) == DaynaPortTarget::Mac{0x02, 0, 0, 0xAA, 0xBB, 0xCC});
+	// a backend that is not a shared LAN keeps the constant default
+	ScsiTargetOptions n;
+	n.eth = "none";
+	CHECK(mac(n) == DaynaPortTarget::kDefaultMac);
+}
+#endif

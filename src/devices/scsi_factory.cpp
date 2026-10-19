@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <random>
 #include <vector>
 
 #include "devices/eth_factory.h"
@@ -48,6 +49,18 @@ std::unique_ptr<scsi::ScsiTarget> CreateScsiTarget(const std::string &typeSpec, 
 			fprintf(stderr, "[SCSI] ID %d: headless/script run without --eth: link down (--eth=slirp for a live link)\n", id);
 		}
 		auto eth = CreateEthBackend(ethSpec, opt.redirs);
+		if (eth->sharesLan() && opt.ethMac.empty())
+		{
+			// Every emulator on a shared hub would otherwise be 02:6d:78:76:6d:01
+			// and the hub would silently swap their traffic.  Pick the last three
+			// octets at random (24 bits: collisions among a handful of emulators
+			// are negligible) and say so; --eth-mac makes it repeatable.
+			std::random_device rd;
+			const uint32_t r = rd();
+			mac = {0x02, 0x6D, 0x78, uint8_t(r >> 16), uint8_t(r >> 8), uint8_t(r)};
+			fprintf(stderr, "[SCSI] ID %d: shared LAN and no --eth-mac: random MAC %02x:%02x:%02x:%02x:%02x:%02x\n", id,
+					mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+		}
 		if (opt.clock && opt.clockUnitsPerSecond)
 		{
 			uint64_t lat = 0;

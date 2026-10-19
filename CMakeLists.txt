@@ -317,6 +317,13 @@ else()
     target_compile_definitions(maxivmac PRIVATE "HAVE_SLIRP=0")
     message(STATUS "Networking: disabled (libslirp not found)")
 endif()
+# --eth=hub:HOST:PORT (UDP to an ethhub; POSIX sockets)
+if(UNIX)
+    target_sources(maxivmac PRIVATE src/devices/eth_hub.cpp)
+    target_compile_definitions(maxivmac PRIVATE "HAVE_ETH_HUB=1")
+else()
+    target_compile_definitions(maxivmac PRIVATE "HAVE_ETH_HUB=0")
+endif()
 
 # ---------------------------------------------------------------------------
 # Icon extraction tool
@@ -394,6 +401,15 @@ if(MAXIVMAC_ETHHUB AND UNIX)
         add_test(NAME ethhub
             COMMAND "${Python3_EXECUTABLE}" -I "${CMAKE_SOURCE_DIR}/tools/ethhub/test/test_ethhub.py"
                     "$<TARGET_FILE:ethhub-asan>")
+    endif()
+    # EthHub backend against the real hub: three backends, unicast + broadcast.
+    if(Python3_Interpreter_FOUND)
+        add_executable(eth-hub-it test/eth_hub_it.cpp src/devices/eth_hub.cpp)
+        target_include_directories(eth-hub-it PRIVATE "${CMAKE_SOURCE_DIR}/src")
+        target_compile_options(eth-hub-it PRIVATE -Wall -Wextra -Werror)
+        add_test(NAME eth_hub_ethhub
+            COMMAND "${Python3_EXECUTABLE}" -I "${CMAKE_SOURCE_DIR}/test/eth_hub_it.py"
+                    "$<TARGET_FILE:ethhub>" "$<TARGET_FILE:eth-hub-it>")
     endif()
 endif()
 
@@ -481,5 +497,11 @@ if(SLIRP_FOUND)
         test/test_eth_slirp.cpp)
     target_link_libraries(tests PRIVATE PkgConfig::SLIRP)
     target_compile_definitions(tests PRIVATE "HAVE_SLIRP=1")
+endif()
+if(UNIX)
+    target_sources(tests PRIVATE src/devices/eth_hub.cpp test/test_eth_hub.cpp)
+    target_compile_definitions(tests PRIVATE "HAVE_ETH_HUB=1")
+else()
+    target_compile_definitions(tests PRIVATE "HAVE_ETH_HUB=0")
 endif()
 add_test(NAME tests COMMAND tests WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")

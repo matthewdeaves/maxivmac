@@ -122,6 +122,17 @@ LaunchConfig parseArgs(std::vector<const char *> args)
 }
 } // namespace
 
+TEST_CASE("eth spec: hub:HOST:PORT splits into kind hub and arg HOST:PORT")
+{
+	EthSpec s;
+	std::string err;
+	REQUIRE(parseEthSpec("hub:127.0.0.1:5555", s, err));
+	CHECK(s.kind == "hub");
+	CHECK(s.arg == "127.0.0.1:5555");
+	REQUIRE(parseEthSpec("hub:example.org:5555", s, err));
+	CHECK(s.arg == "example.org:5555");
+}
+
 TEST_CASE("cli: --scsiN, --eth and --eth-mac")
 {
 	LaunchConfig lc = parseArgs({"--scsi4=daynaport", "--scsi0=none", "--eth=slirp,hostfwd=tcp::8080-:80",

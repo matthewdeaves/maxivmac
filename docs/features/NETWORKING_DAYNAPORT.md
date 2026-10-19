@@ -18,9 +18,9 @@ maxivmac --model=MacPlus --scsi4=daynaport \
 | Option | Meaning |
 |--------|---------|
 | `--scsiN=daynaport[,multiframe]` / `none` | Attach (or not) a DaynaPORT at SCSI ID N, 0-6. Any ID works; the Mac is ID 7. `multiframe` packs several received frames into one READ (default: one frame per READ, like BlueSCSI; unverified against the real driver). |
-| `--eth=slirp[,hostfwd=...]` | Backend. `slirp` is user-mode NAT; `none` is a cable that is out. **Default:** `slirp` in an interactive run (when built with libslirp), `none` with `--headless` or `--dbg-script`. libslirp runs on the host clock and real sockets, so a live link would make scripted runs non-deterministic; give `--eth=slirp` explicitly to get one there (a note is printed when the default applies). |
+| `--eth=slirp[,hostfwd=...]` | Backend. `slirp` is user-mode NAT; `hub:HOST:PORT` joins an ethhub virtual LAN (below); `none` is a cable that is out. **Default:** `slirp` in an interactive run (when built with libslirp), `none` with `--headless` or `--dbg-script`. libslirp runs on the host clock and real sockets, so a live link would make scripted runs non-deterministic; give `--eth=slirp` explicitly to get one there (a note is printed when the default applies). |
 | `hostfwd=tcp:[HOSTIP]:HOSTPORT-GUESTIP:GUESTPORT` | Host-to-guest forward, TCP or `udp`; `GUESTIP` may be empty (= 10.0.2.15). `HOSTIP` is the host address to listen on, a dotted quad; **empty means 127.0.0.1**, so the forward is reachable from this machine only. `0.0.0.0` (or an interface address) exposes it to the network and prints a warning. Repeatable. |
-| `--eth-mac=xx:xx:xx:xx:xx:xx` | Adapter MAC. Default `02:6d:78:76:6d:01` (locally administered). A guest can override it with the driver's set-MAC command. |
+| `--eth-mac=xx:xx:xx:xx:xx:xx` | Adapter MAC. Default `02:6d:78:76:6d:01` (locally administered); with `--eth=hub:` the default is a random `02:6d:78:xx:xx:xx`, printed at start. A guest can override it with the driver's set-MAC command. |
 | `--eth-latency=DURATION` | Minimum delay before a received frame is visible to the guest, measured on the **emulated** clock. Default `2ms`; `500us`, `1s` (at most one second); `0` or `off` disables. A unit is required. See "Receive latency" below. |
 | `--net-redir=tcp:HOST:GUESTIP:GUEST` | Older form of host forward (loopback only, no host address). Applies to `--eth=slirp` and to `--serial-a=slip`. `--slip-redir` is kept as an alias. |
 | `--diag=scsi` | Trace every CDB, data record and status the target sees. |
@@ -125,6 +125,47 @@ believing the network is gone. Keep the speed at 1x for networking until this
 is measured with MacTCP. libslirp's timers are fired from `poll()` (their
 expiry is in milliseconds on the clock `clock_get_ns()` reports in nanoseconds).
 
+## Joining an ethhub: `--eth=hub:HOST:PORT`
+
+`EthHub` (`src/devices/eth_hub.{h,cpp}`) speaks the wire format of
+`tools/ethhub` (`ETHHUB.md`): one raw Ethernet frame (14..1514 bytes) per UDP
+datagram, a zero-length datagram as hello/keepalive. Start a hub, then point
+each emulator at it:
+
+```sh
+ethhub --listen 127.0.0.1:5555 &
+maxivmac --scsi4=daynaport --eth=hub:127.0.0.1:5555 disk1.hfs
+maxivmac --scsi4=daynaport --eth=hub:127.0.0.1:5555 disk2.hfs     # another instance, same LAN
+```
+
+- The socket is non-blocking; the emulation thread never waits. A frame is
+  dropped (and counted) when the socket would block. `HOST` (IPv4 address or
+  name) is resolved once, at start, so a name lookup can delay start-up but
+  nothing later. IPv6 literals are not supported (the hub is IPv4 only).
+- A hello goes out at start and then every 5 s of **wall** time (the hub drops
+  a client after 60 s of silence), however fast or slow the emulation runs.
+- Received frames go through the usual 64-frame drop-oldest queue. Datagrams
+  from any source other than the hub, and datagrams of 1..13 or more than 1514
+  bytes, are ignored and counted. Counters are printed to stderr when the
+  emulator exits if anything was dropped.
+- **Link state is not hub liveness.** UDP has no connection, so the link is
+  "up" as soon as the socket exists, hub or no hub. With no hub listening the
+  guest sees a link that carries nothing.
+- **MACs.** Two emulators with the same MAC on one hub would silently steal
+  each other's traffic (the hub learns MAC -> client). With a hub and no
+  `--eth-mac`, the adapter therefore gets a random locally administered MAC
+  `02:6d:78:xx:xx:xx` (24 random bits, negligible collision odds for a handful
+  of emulators) and prints it. Pass `--eth-mac` for a fixed, repeatable MAC
+  (needed for repeatable scripted runs). The guest can still override it with
+  the driver's set-MAC command; that is the guest's responsibility.
+- Tests: `test/test_eth_hub.cpp` (loopback fake hub, fake wall clock) and the
+  ctest `eth_hub_ethhub`, which starts the real `ethhub` and runs three
+  `EthHub` backends through broadcast, unicast and unknown-unicast flooding
+  (`test/eth_hub_it.cpp`, driver `test/eth_hub_it.py`; needs `MAXIVMAC_ETHHUB`).
+- `--eth-latency` applies to hub frames too (default 2 ms of emulated time).
+  Frames are collected once per emulated tick, so a hub frame reaches the
+  guest up to one tick (1/60 s) after it arrives at the socket.
+
 ## Receive latency
 
 libslirp answers an ICMP echo or an ARP request inside `send()`, so the reply
@@ -154,7 +195,7 @@ of the classic TCP/IP tools.
 
 ## Limits
 
-- No hub/bridge backend yet (the factory leaves room for it).
+- No tap/bridge backend (the factory leaves room for it).
 - Only unicast/broadcast/exact-match multicast filtering; no hash filter, no
   promiscuous mode.
 - Receive mode bits of `0x0C` other than the MAC override are accepted and ignored.

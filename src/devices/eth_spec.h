@@ -4,6 +4,7 @@
 	Pure string handling, no libslirp: unit-testable everywhere.
 
 	  --eth=KIND[:ARG][,key=value]...      e.g.  slirp,hostfwd=tcp::8080-10.0.2.15:80
+	                                             hub:127.0.0.1:5555
 	  hostfwd=tcp:[HOSTIP]:HOSTPORT-[GUESTIP]:GUESTPORT   (also udp)
 	      HOSTIP  host address to listen on; empty = 127.0.0.1 (this machine
 	              only).  0.0.0.0 exposes the forward on every interface.

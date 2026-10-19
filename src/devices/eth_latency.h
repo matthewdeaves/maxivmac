@@ -75,6 +75,7 @@ public:
 	}
 
 	uint64_t droppedFrames() const override { return inner_->droppedFrames() + dropped_; }
+	bool sharesLan() const override { return inner_->sharesLan(); }
 	const char *name() const override { return inner_->name(); }
 
 	uint64_t latency() const { return latency_; }
