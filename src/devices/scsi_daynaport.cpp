@@ -75,7 +75,7 @@ uint32_t DaynaPortTarget::rxDropped() const
 }
 
 DaynaPortTarget::DaynaPortTarget(std::unique_ptr<EthernetBackend> eth, Mac mac)
-	: eth_(std::move(eth)), mac_(mac)
+	: eth_(std::move(eth)), mac_(mac), defaultMac_(mac)
 {
 }
 
@@ -314,12 +314,22 @@ bool DaynaPortTarget::accepts(std::span<const uint8_t> frame) const
 	return false;
 }
 
+// SCSI bus reset or BUS DEVICE RESET: back to the power-on state.  The
+// adapter is disabled, the MAC override and multicast list are forgotten,
+// pending frames and sense are lost and any transfer in flight is aborted.
+// Statistics keep counting across a reset.
 void DaynaPortTarget::busReset()
 {
 	enabled_ = false;
 	sense_ = 0;
 	length_ = 0;
 	writeHeader_ = false;
+	mac_ = defaultMac_;
+	multicast_.clear();
+	allMulticast_ = false;
+	for (size_t i = 0; i < kEthRxQueueFrames + 1 && eth_->peekSize(); i++)
+		eth_->receive(std::span<uint8_t>(buf_.data(), kEthMaxFrame));
+	SCSI_LOG("dayna: reset");
 }
 
 void DaynaPortTarget::abort()

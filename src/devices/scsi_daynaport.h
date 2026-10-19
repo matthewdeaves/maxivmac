@@ -69,6 +69,7 @@ private:
 
 	std::unique_ptr<EthernetBackend> eth_;
 	Mac mac_;
+	Mac defaultMac_;
 	std::vector<Mac> multicast_;
 	bool allMulticast_ = false;
 	std::array<uint8_t, 16> cdb_{};
