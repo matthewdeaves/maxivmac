@@ -42,7 +42,8 @@ public:
 	const Mac &mac() const { return mac_; }
 
 private:
-	static constexpr size_t kBufSize = kEthMaxFrame + 10;
+	// Transfer buffer: bounds a packed READ and the largest DATA OUT.
+	static constexpr size_t kBufSize = 16384;
 
 	scsi::Step handle(uint8_t lun);
 	scsi::Step error(uint8_t senseKey);
@@ -52,8 +53,8 @@ private:
 
 	std::unique_ptr<EthernetBackend> eth_;
 	Mac mac_;
-	std::array<uint8_t, kBufSize> buf_{};
 	std::array<uint8_t, 16> cdb_{};
+	std::vector<uint8_t> buf_ = std::vector<uint8_t>(kBufSize);
 	size_t length_ = 0;
 	uint8_t sense_ = 0;
 	bool enabled_ = false;
