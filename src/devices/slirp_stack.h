@@ -64,8 +64,16 @@ public:
 	void input(const uint8_t *frame, size_t len);
 	/* Non-blocking pump; call once per emulated tick. */
 	void poll();
-	/* Host -> guest port forward (TCP or UDP); guestIP "" = config().guest. */
-	bool addHostFwd(bool isUDP, uint16_t hostPort, const char *guestIP, uint16_t guestPort);
+	/* Host -> guest port forward (TCP or UDP); guestIP "" = config().guest.
+	   hostAddr is the host address to listen on: ""/null = 127.0.0.1, so a
+	   forward is reachable from this machine only; pass "0.0.0.0" (or an
+	   interface address) to expose it, which logs a warning. */
+	bool addHostFwd(bool isUDP, const char *hostAddr, uint16_t hostPort, const char *guestIP,
+					uint16_t guestPort);
+	bool addHostFwd(bool isUDP, uint16_t hostPort, const char *guestIP, uint16_t guestPort)
+	{
+		return addHostFwd(isUDP, "", hostPort, guestIP, guestPort);
+	}
 
 	/* libslirp's timer table (fired from poll()). */
 	SlirpTimers &timers() { return timers_; }

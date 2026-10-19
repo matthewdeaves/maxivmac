@@ -224,13 +224,23 @@ void SlirpStack::poll()
 	});
 }
 
-bool SlirpStack::addHostFwd(bool isUDP, uint16_t hostPort, const char *guestIP,
+bool SlirpStack::addHostFwd(bool isUDP, const char *hostAddr, uint16_t hostPort, const char *guestIP,
 							  uint16_t guestPort)
 {
 	if (!slirp_) return false;
 
+	/* Loopback unless asked: INADDR_ANY would hand the guest's services to
+	   every machine that can reach this host. */
 	struct in_addr host_addr;
-	host_addr.s_addr = htonl(INADDR_ANY);
+	if (!hostAddr || !*hostAddr) host_addr.s_addr = htonl(INADDR_LOOPBACK);
+	else if (inet_pton(AF_INET, hostAddr, &host_addr) != 1)
+	{
+		NET_LOG("hostfwd: bad host IP '%s'", hostAddr);
+		return false;
+	}
+	if ((ntohl(host_addr.s_addr) >> 24) != 127)
+		fprintf(stderr, "[NET] warning: host forward %s:%u listens on %s, not only on this machine\n",
+				isUDP ? "udp" : "tcp", hostPort, hostAddr);
 
 	struct in_addr guest_addr;
 	if (!guestIP || !*guestIP) guest_addr.s_addr = htonl(cfg_.guest);

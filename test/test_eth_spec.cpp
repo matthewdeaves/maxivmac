@@ -18,12 +18,28 @@ TEST_CASE("eth spec: hostfwd tcp and udp with and without a guest address")
 	CHECK(f.guestPort == 5001);
 }
 
+TEST_CASE("eth spec: hostfwd carries an optional host address, default loopback")
+{
+	HostFwdSpec f;
+	REQUIRE(parseHostFwd("tcp::8080-:80", f));
+	CHECK(f.hostIp.empty()); // empty means 127.0.0.1 when applied
+	REQUIRE(parseHostFwd("tcp:127.0.0.1:8080-10.0.2.15:80", f));
+	CHECK(f.hostIp == "127.0.0.1");
+	REQUIRE(parseHostFwd("udp:0.0.0.0:5000-:5001", f));
+	CHECK(f.hostIp == "0.0.0.0");
+	CHECK(f.hostPort == 5000);
+	CHECK_FALSE(parseHostFwd("tcp:localhost:8080-:80", f)); // dotted quad only
+	CHECK_FALSE(parseHostFwd("tcp:1.2.3:8080-:80", f));
+	REQUIRE(parseNetRedir("tcp:8080:10.0.2.15:80", f));
+	CHECK(f.hostIp.empty()); // the legacy form is loopback only
+}
+
 TEST_CASE("eth spec: malformed hostfwd is rejected")
 {
 	HostFwdSpec f;
 	for (const char *bad : {"", "tcp", "tcp:8080-10.0.2.15:80", "tcp::8080:10.0.2.15:80", "tcp::x-10.0.2.15:80",
 							"tcp::70000-10.0.2.15:80", "tcp::8080-10.0.2:80", "tcp::8080-10.0.2.15:", "sctp::1-:2",
-							"tcp:127.0.0.1:8080-10.0.2.15:80", "tcp::8080-10.0.2.256:80"})
+							"tcp::8080-10.0.2.256:80"})
 		CHECK_MESSAGE(!parseHostFwd(bad, f), bad);
 }
 

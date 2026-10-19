@@ -4,8 +4,10 @@
 	Pure string handling, no libslirp: unit-testable everywhere.
 
 	  --eth=KIND[:ARG][,key=value]...      e.g.  slirp,hostfwd=tcp::8080-10.0.2.15:80
-	  hostfwd=tcp::HOSTPORT-GUESTIP:GUESTPORT   (also udp; GUESTIP may be empty
-	                                             = the guest address)
+	  hostfwd=tcp:[HOSTIP]:HOSTPORT-[GUESTIP]:GUESTPORT   (also udp)
+	      HOSTIP  host address to listen on; empty = 127.0.0.1 (this machine
+	              only).  0.0.0.0 exposes the forward on every interface.
+	      GUESTIP empty = the guest address
 	  --net-redir=tcp:HOSTPORT:GUESTIP:GUESTPORT   (legacy form, also udp)
 	  --eth-mac=xx:xx:xx:xx:xx:xx
 */
@@ -21,6 +23,7 @@
 struct HostFwdSpec
 {
 	bool udp = false;
+	std::string hostIp; // empty = loopback (127.0.0.1)
 	uint16_t hostPort = 0;
 	std::string guestIp; // empty = the stack's guest address
 	uint16_t guestPort = 0;

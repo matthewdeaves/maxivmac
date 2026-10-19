@@ -52,9 +52,13 @@ bool parseHostFwd(std::string_view s, HostFwdSpec &out)
 {
 	HostFwdSpec r;
 	if (!parseProto(s, r.udp)) return false;
-	// Now "[hostaddr]:hostport-[guestaddr]:guestport"; only the empty host address is supported.
-	if (s.empty() || s[0] != ':') return false;
-	s.remove_prefix(1);
+	// Now "[hostaddr]:hostport-[guestaddr]:guestport".
+	const size_t hc = s.find(':');
+	if (hc == std::string_view::npos) return false;
+	const std::string_view host = s.substr(0, hc);
+	if (!host.empty() && !validIpv4(host)) return false;
+	r.hostIp = std::string(host);
+	s.remove_prefix(hc + 1);
 	const size_t dash = s.find('-');
 	if (dash == std::string_view::npos) return false;
 	if (!parsePort(s.substr(0, dash), r.hostPort)) return false;

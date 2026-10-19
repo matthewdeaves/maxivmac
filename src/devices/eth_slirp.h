@@ -30,6 +30,11 @@ public:
 	uint64_t droppedFrames() const override { return rx_.dropped(); }
 	const char *name() const override { return "slirp"; }
 
+	bool addHostFwd(bool isUDP, const char *hostAddr, uint16_t hostPort, const char *guestIP,
+					uint16_t guestPort)
+	{
+		return stack_.addHostFwd(isUDP, hostAddr, hostPort, guestIP, guestPort);
+	}
 	bool addHostFwd(bool isUDP, uint16_t hostPort, const char *guestIP, uint16_t guestPort)
 	{
 		return stack_.addHostFwd(isUDP, hostPort, guestIP, guestPort);

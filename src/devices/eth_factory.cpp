@@ -23,9 +23,10 @@ std::unique_ptr<EthernetBackend> makeSlirp(const EthSpec &spec, const std::vecto
 {
 	auto e = std::make_unique<EthSlirp>();
 	auto fwd = [&](const HostFwdSpec &f) {
-		if (!e->addHostFwd(f.udp, f.hostPort, f.guestIp.c_str(), f.guestPort))
-			fprintf(stderr, "[ETH] host forward %s:%u -> %s:%u failed\n", f.udp ? "udp" : "tcp",
-					f.hostPort, f.guestIp.empty() ? "guest" : f.guestIp.c_str(), f.guestPort);
+		if (!e->addHostFwd(f.udp, f.hostIp.c_str(), f.hostPort, f.guestIp.c_str(), f.guestPort))
+			fprintf(stderr, "[ETH] host forward %s:%s:%u -> %s:%u failed\n", f.udp ? "udp" : "tcp",
+					f.hostIp.empty() ? "127.0.0.1" : f.hostIp.c_str(), f.hostPort,
+					f.guestIp.empty() ? "guest" : f.guestIp.c_str(), f.guestPort);
 	};
 	for (const auto &f : spec.hostfwds) fwd(f);
 	for (const auto &f : extra) fwd(f);

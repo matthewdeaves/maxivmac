@@ -5,6 +5,13 @@
 
 #if HAVE_SLIRP
 
+#include <arpa/inet.h>
+#include <ifaddrs.h>
+#include <net/if.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
 #include <vector>
 
 #include "devices/eth_slirp.h"
@@ -134,10 +141,72 @@ TEST_CASE("eth slirp: custom addressing comes from one Config")
 	CHECK(r[27] == 0x01); // 52:55:c0:a8:00:01
 }
 
-TEST_CASE("eth slirp: host forwards reject a bad guest address")
+TEST_CASE("eth slirp: host forwards reject a bad guest or host address")
 {
 	EthSlirp e;
 	CHECK_FALSE(e.addHostFwd(false, 0, "not-an-ip", 80));
+	CHECK_FALSE(e.addHostFwd(false, "localhost", 0, "", 80));
+}
+
+namespace
+{
+// A host forward is a listener on the host: it must be on loopback unless
+// the spec says otherwise, never on every interface.
+bool portInUse(uint16_t port, uint32_t addrHostOrder)
+{
+	int s = socket(AF_INET, SOCK_STREAM, 0);
+	sockaddr_in a{};
+	a.sin_family = AF_INET;
+	a.sin_addr.s_addr = htonl(addrHostOrder);
+	a.sin_port = htons(port);
+	const bool inUse = bind(s, reinterpret_cast<sockaddr *>(&a), sizeof a) != 0;
+	close(s);
+	return inUse;
+}
+
+// First non-loopback IPv4 address of this host (host order), or 0.
+uint32_t nonLoopbackAddress()
+{
+	uint32_t found = 0;
+	ifaddrs *list = nullptr;
+	if (getifaddrs(&list) != 0) return 0;
+	for (ifaddrs *i = list; i && !found; i = i->ifa_next)
+	{
+		if (!i->ifa_addr || i->ifa_addr->sa_family != AF_INET || (i->ifa_flags & IFF_LOOPBACK)) continue;
+		found = ntohl(reinterpret_cast<sockaddr_in *>(i->ifa_addr)->sin_addr.s_addr);
+	}
+	freeifaddrs(list);
+	return found;
+}
+
+uint16_t freePort()
+{
+	int s = socket(AF_INET, SOCK_STREAM, 0);
+	sockaddr_in a{};
+	a.sin_family = AF_INET;
+	a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+	bind(s, reinterpret_cast<sockaddr *>(&a), sizeof a);
+	socklen_t n = sizeof a;
+	getsockname(s, reinterpret_cast<sockaddr *>(&a), &n);
+	close(s);
+	return ntohs(a.sin_port);
+}
+} // namespace
+
+TEST_CASE("eth slirp: a host forward listens on loopback by default, not on every interface")
+{
+	EthSlirp e;
+	const uint16_t port = freePort();
+	REQUIRE(e.addHostFwd(false, port, "", 80));
+	CHECK(portInUse(port, INADDR_LOOPBACK));
+	// A wildcard listener would also hold this machine's other addresses.
+	const uint32_t other = nonLoopbackAddress();
+	if (!other)
+	{
+		MESSAGE("no non-loopback IPv4 address on this host: wildcard check skipped");
+		return;
+	}
+	CHECK_FALSE(portInUse(port, other));
 }
 
 #endif // HAVE_SLIRP
