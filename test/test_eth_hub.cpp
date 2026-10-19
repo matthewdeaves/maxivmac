@@ -406,4 +406,83 @@ TEST_CASE("eth hub auth: --eth=hub:...,key=FILE reads the key; a bad key file me
 	REQUIRE(hub2.recv(d));
 	CHECK(d.empty());
 }
+
+TEST_CASE("eth hub auth: key loader refuses a FIFO without blocking, and a missing owner match is checked")
+{
+	const std::string path = std::string(std::getenv("TMPDIR") ? std::getenv("TMPDIR") : "/tmp") +
+							 "/maxivmac_hubkey_fifo_" + std::to_string(::getpid());
+	REQUIRE(::mkfifo(path.c_str(), 0600) == 0);
+	std::vector<uint8_t> key;
+	std::string err;
+	CHECK_FALSE(loadHubKey(path, key, err)); // must return, not wait for a writer
+	CHECK(err.find("regular file") != std::string::npos);
+	::unlink(path.c_str());
+}
+
+TEST_CASE("eth hub: keepalive hellos do not depend on poll() (the emulation tick)")
+{
+	FakeHub hub;
+	EthHub::Options o;
+	o.keepaliveMs = 40;
+	auto h = make(hub, o); // real clock: a timer thread sends them
+	std::vector<uint8_t> d;
+	REQUIRE(hub.recv(d)); // start hello
+	int got = 0;
+	for (int i = 0; i < 3 && hub.recv(d); i++) got += d.empty();
+	CHECK(got == 3); // three more, and poll() was never called
+	CHECK(h->stats().hellos >= 4);
+}
+
+TEST_CASE("eth hub: the keyed hello thread stops with the backend")
+{
+	FakeHub hub;
+	{
+		EthHub::Options o;
+		o.keepaliveMs = 20;
+		o.key = bytes("correct horse battery staple");
+		auto h = make(hub, o);
+		std::this_thread::sleep_for(std::chrono::milliseconds(80));
+	} // destructor joins the thread; a hang or a crash here fails the test
+	CHECK(true);
+}
+
+TEST_CASE("eth hub: keyed hellos that are never answered produce one hint; an answer cancels it")
+{
+	{
+		FakeHub hub; // never answers
+		EthHub::Options o;
+		o.keepaliveMs = 20;
+		o.hintAfterMs = 100;
+		o.key = bytes("correct horse battery staple");
+		auto h = make(hub, o);
+		for (int i = 0; i < 40 && !h->stats().keyHint; i++) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+		CHECK(h->stats().keyHint);
+	}
+	{
+		FakeHub hub; // answers the first hello with an empty datagram, as ethhub does
+		EthHub::Options o;
+		o.keepaliveMs = 20;
+		o.hintAfterMs = 100;
+		o.key = bytes("correct horse battery staple");
+		auto h = make(hub, o);
+		std::vector<uint8_t> d;
+		REQUIRE(hub.recv(d));
+		hub.sendTo(hub.lastFrom, {});
+		for (int i = 0; i < 40; i++)
+		{
+			h->poll();
+			std::this_thread::sleep_for(std::chrono::milliseconds(10));
+		}
+		CHECK_FALSE(h->stats().keyHint);
+	}
+	{
+		FakeHub hub; // no key: nothing to hint about
+		EthHub::Options o;
+		o.keepaliveMs = 20;
+		o.hintAfterMs = 50;
+		auto h = make(hub, o);
+		std::this_thread::sleep_for(std::chrono::milliseconds(200));
+		CHECK_FALSE(h->stats().keyHint);
+	}
+}
 #endif

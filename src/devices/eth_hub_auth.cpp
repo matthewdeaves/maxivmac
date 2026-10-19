@@ -24,6 +24,12 @@ constexpr uint32_t K[64] = {
 	0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
 	0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2};
 
+void secureZero(void *p, size_t n)
+{
+	volatile uint8_t *v = static_cast<volatile uint8_t *>(p);
+	while (n--) *v++ = 0;
+}
+
 constexpr uint32_t ror(uint32_t x, int n) { return (x >> n) | (x << (32 - n)); }
 
 struct Sha256
@@ -95,6 +101,7 @@ std::array<uint8_t, 32> hmacSha256(std::span<const uint8_t> key, std::span<const
 		s.update(key.data(), key.size());
 		const auto d = s.finish();
 		std::memcpy(k, d.data(), d.size());
+		secureZero(&s, sizeof s);
 	}
 	else if (!key.empty())
 	{
@@ -105,11 +112,18 @@ std::array<uint8_t, 32> hmacSha256(std::span<const uint8_t> key, std::span<const
 	Sha256 in;
 	in.update(ipad, 64);
 	in.update(msg.data(), msg.size());
-	const auto inner = in.finish();
+	auto inner = in.finish();
 	Sha256 out;
 	out.update(opad, 64);
 	out.update(inner.data(), inner.size());
-	return out.finish();
+	const auto r = out.finish();
+	secureZero(k, sizeof k);
+	secureZero(ipad, sizeof ipad);
+	secureZero(opad, sizeof opad);
+	secureZero(inner.data(), inner.size());
+	secureZero(&in, sizeof in);
+	secureZero(&out, sizeof out);
+	return r;
 }
 
 std::array<uint8_t, kHubHelloLen> makeHubHello(std::span<const uint8_t> key, uint64_t unixSeconds)
@@ -123,14 +137,15 @@ std::array<uint8_t, kHubHelloLen> makeHubHello(std::span<const uint8_t> key, uin
 	uint8_t msg[kCtxLen + 5];
 	std::memcpy(msg, kCtx, kCtxLen);
 	std::memcpy(msg + kCtxLen, h.data(), 5);
-	const auto mac = hmacSha256(key, msg);
+	auto mac = hmacSha256(key, msg);
 	std::memcpy(h.data() + 5, mac.data(), 8);
+	secureZero(mac.data(), mac.size());
 	return h;
 }
 
 bool loadHubKey(const std::string &path, std::vector<uint8_t> &key, std::string &err)
 {
-	const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
+	const int fd = ::open(path.c_str(), O_RDONLY | O_NONBLOCK | O_CLOEXEC); // non-blocking: a FIFO must not hang the start
 	if (fd < 0)
 	{
 		err = "cannot open hub key file '" + path + "': " + strerror(errno);
@@ -140,6 +155,12 @@ bool loadHubKey(const std::string &path, std::vector<uint8_t> &key, std::string 
 	if (::fstat(fd, &st) != 0 || !S_ISREG(st.st_mode))
 	{
 		err = "hub key file '" + path + "' is not a regular file";
+		::close(fd);
+		return false;
+	}
+	if (st.st_uid != geteuid())
+	{
+		err = "hub key file '" + path + "' is not owned by the user running maxivmac";
 		::close(fd);
 		return false;
 	}
@@ -155,6 +176,7 @@ bool loadHubKey(const std::string &path, std::vector<uint8_t> &key, std::string 
 	if (n < 0 || size_t(n) > kHubKeyMax)
 	{
 		err = "hub key file '" + path + (n < 0 ? "' is unreadable" : "' is longer than 1024 bytes");
+		secureZero(buf.data(), buf.size());
 		return false;
 	}
 	size_t len = size_t(n);
@@ -162,8 +184,11 @@ bool loadHubKey(const std::string &path, std::vector<uint8_t> &key, std::string 
 	if (len < kHubKeyMin)
 	{
 		err = "hub key in '" + path + "' is shorter than 16 bytes";
+		secureZero(buf.data(), buf.size());
 		return false;
 	}
+	if (std::all_of(buf.begin(), buf.begin() + len, [&](uint8_t c) { return c == buf[0]; }))
+		fprintf(stderr, "[ETH] WARNING: hub key in '%s' is one byte repeated: anyone can guess it\n", path.c_str());
 	buf.resize(len);
 	key = std::move(buf);
 	return true;

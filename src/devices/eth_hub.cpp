@@ -7,6 +7,7 @@
 
 #include <arpa/inet.h>
 #include <cerrno>
+#include <algorithm>
 #include <charconv>
 #include <chrono>
 #include <cstdio>
@@ -24,6 +25,12 @@ struct EthHub::Peer
 
 namespace
 {
+void secureZero(uint8_t *p, size_t n)
+{
+	volatile uint8_t *v = p;
+	while (n--) *v++ = 0;
+}
+
 // Datagrams read per poll(): bounds the work of one tick under a flood.
 constexpr int kMaxReadsPerPoll = 128;
 } // namespace
@@ -79,12 +86,24 @@ std::unique_ptr<EthHub> EthHub::create(const std::string &hostPort, std::string 
 	}
 	h->fd_ = fd;
 	h->opt_ = std::move(opt);
+	h->startMs_ = h->now();
 	h->hello(); // registers us with the hub (and binds the local port)
+	h->startKeepalive();
 	return h;
 }
 
 EthHub::~EthHub()
 {
+	if (kaThread_.joinable())
+	{
+		{
+			std::lock_guard<std::mutex> lk(kaMu_);
+			kaStop_ = true;
+		}
+		kaCv_.notify_all();
+		kaThread_.join();
+	}
+	if (!opt_.key.empty()) secureZero(opt_.key.data(), opt_.key.size());
 	if (fd_ >= 0) ::close(fd_);
 	if (stats_.txDropped || stats_.rxBadSize || stats_.rxForeign || rx_.dropped())
 		fprintf(stderr, "[ETH] hub: tx %llu (dropped %llu), rx %llu (queue drops %llu, bad size %llu, foreign %llu)\n",
@@ -115,10 +134,48 @@ bool EthHub::sendDatagram(const uint8_t *p, size_t n)
 	return r == static_cast<ssize_t>(n);
 }
 
+const EthHub::Stats &EthHub::stats() const
+{
+	stats_.hellos = helloCount_;
+	stats_.keyHint = hinted_;
+	return stats_;
+}
+
+void EthHub::startKeepalive()
+{
+	if (!opt_.wallMs && opt_.keepaliveMs > 0) kaThread_ = std::thread([this] { keepaliveLoop(); });
+}
+
+void EthHub::keepaliveLoop()
+{
+	std::unique_lock<std::mutex> lk(kaMu_);
+	while (!kaStop_)
+	{
+		kaCv_.wait_for(lk, std::chrono::milliseconds(opt_.keepaliveMs), [this] { return kaStop_; });
+		if (kaStop_) break;
+		lk.unlock();
+		hello();
+		checkKeyHint();
+		lk.lock();
+	}
+}
+
+// One hint, once: keyed hellos have gone out for a while and the hub (which answers each
+// accepted one with an empty datagram) never has.  The same silence is what a wrong key, a
+// hub without a key and clocks more than --auth-window apart look like.
+void EthHub::checkKeyHint()
+{
+	if (opt_.key.empty() || ackSeen_ || hinted_ || now() - startMs_ < opt_.hintAfterMs) return;
+	if (hinted_.exchange(true)) return;
+	fprintf(stderr, "[ETH] hub: keyed hellos sent for %lld s and the hub has not answered: check that it runs with the "
+					"same --key-file and that both clocks agree to within its --auth-window\n",
+			(long long)(opt_.hintAfterMs / 1000));
+}
+
 void EthHub::hello()
 {
 	lastHelloMs_ = now();
-	stats_.hellos++;
+	helloCount_++;
 	if (!opt_.key.empty())
 	{
 		const uint64_t t = opt_.unixSec ? opt_.unixSec()
@@ -150,7 +207,11 @@ bool EthHub::send(std::span<const uint8_t> frame)
 void EthHub::poll()
 {
 	if (fd_ < 0) return;
-	if (now() - lastHelloMs_ >= opt_.keepaliveMs) hello();
+	if (!kaThread_.joinable())
+	{
+		if (now() - lastHelloMs_ >= opt_.keepaliveMs) hello();
+		checkKeyHint();
+	}
 
 	uint8_t buf[2048]; // anything larger than a frame arrives truncated and is refused by size
 	for (int i = 0; i < kMaxReadsPerPoll; i++)
@@ -164,7 +225,11 @@ void EthHub::poll()
 			stats_.rxForeign++;
 			continue;
 		}
-		if (n == 0) continue; // a hello echoed back: nothing to deliver
+		if (n == 0)
+		{
+			ackSeen_ = true; // the hub answered a keyed hello (or echoed a plain one): nothing to deliver
+			continue;
+		}
 		if (n < static_cast<ssize_t>(kEthHeaderLen) || n > static_cast<ssize_t>(kEthMaxFrame))
 		{
 			stats_.rxBadSize++;

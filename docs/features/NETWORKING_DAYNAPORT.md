@@ -145,7 +145,8 @@ maxivmac --scsi4=daynaport --eth=hub:127.0.0.1:5555 disk2.hfs     # another inst
   name) is resolved once, at start, so a name lookup can delay start-up but
   nothing later. IPv6 literals are not supported (the hub is IPv4 only).
 - A hello goes out at start and then every 5 s of **wall** time (the hub drops
-  a client after 60 s of silence), however fast or slow the emulation runs.
+  a client after 60 s of silence), however fast or slow the emulation runs, and while it is paused (a timer
+  thread sends them, not the emulation tick).
 - **Key.** `--eth=hub:HOST:PORT,key=FILE` (or `MAXIVMAC_HUB_KEY_FILE=FILE`)
   makes the hello the 13-byte keyed hello that a hub started with
   `--key-file` requires (`ETHHUB.md`, Authentication; `eth_hub_auth.h`). FILE

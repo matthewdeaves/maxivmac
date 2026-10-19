@@ -43,16 +43,34 @@ Status: the emulator joins a hub with `--eth=hub:HOST:PORT` (`EthHub` in
   newcomer is refused and counted (`dropped_full`). A client that keeps its
   hellos going is therefore never pushed out by newcomers, and a table full of
   dead clients does not lock the LAN for `--client-timeout`. One source IP can
-  hold at most `--max-per-ip` clients (default 16, 0 = no limit; counted as
-  `dropped_ip_cap`). Mind NAT: everything behind one NAT/Docker gateway is one
-  IP.
+  hold at most `--max-per-ip` clients (default 16 for other hosts, **no limit
+  for loopback** unless `--max-per-ip` is given, so any number of local
+  emulators can join; 0 = no limit everywhere; counted as `dropped_ip_cap`,
+  and a refusal is logged once per 10 s). Mind NAT: everything behind one
+  NAT/Docker gateway is one IP, so raise or zero the limit there.
 - **MAC pinning** (`--mac-move=deny|allow`, default `deny`): a MAC learned on
   client A cannot be taken over by client B while A is **live**, i.e. A sent
-  any datagram (frame or hello) within `--live-window` seconds. B's frame is
-  dropped, not forwarded (`dropped_macmove`; `--verbose` logs it). For the TAP
-  port and the `--connect` uplink, which carry many MACs and never go away,
-  the MAC entry itself must have been refreshed within the window. `allow`
-  restores the old learn-anywhere behaviour.
+  any datagram (frame or hello; with a key, a keyed hello) within
+  `--live-window` seconds. B's frame is dropped, not forwarded
+  (`dropped_macmove`; `--verbose` logs it). `allow` restores the old
+  learn-anywhere behaviour. Pinning is only as good as the table behind it, so:
+  - a MAC entry lives as long as its owner keeps talking (`--mac-timeout`
+    counts from the newer of the entry's and the owner's last datagram), so a
+    guest that is merely quiet does not lose its MAC while its keepalives go on;
+  - a full MAC table only gives up an entry whose owner is gone, or one that
+    belongs to the client that is learning, so source-MAC churn cannot push a
+    live client's entries out; if nothing may go the frame is dropped
+    (`dropped_macfull`);
+  - a client holds at most `--max-macs-per-client` entries (default 8; the next
+    one replaces its own least recently seen), so one client cannot fill the table;
+  - **trunks** (the TAP port, the `--connect` uplink, and any client listed with
+    `--trunk a.b.c.d[/n]` or `--trunk a.b.c.d:port`, i.e. a child hub that
+    joined you) carry a whole LAN: they are exempt from the MAC cap, the rate
+    limit and the flood cap, they may take a MAC from a guest (it moved to the
+    other side), and their MACs always count as live, so a quiet host stack
+    stays protected until `--mac-timeout`. A child hub that is *not* listed is
+    just one more client and is limited like one; list it. A hub loop is
+    unprotected by any of this, as before.
 - **Rate limits**: per client a token bucket of `--rate FPS[,BPS]` (default
   10000 frames/s and 12.5 MB/s, i.e. 100 Mbit/s; burst a quarter of a second,
   at least 8 frames / one full frame); excess datagrams are dropped before
@@ -60,8 +78,10 @@ Status: the emulator joins a hub with `--eth=hub:HOST:PORT` (`EthHub` in
   `--flood-rate BPS` (default 2 MB/s) caps the egress bytes one client can
   cause by flooding (broadcast, multicast, unknown unicast; a frame costs
   length x copies, so one 1514-byte broadcast to 63 ports costs 95 KB), and the
-  hub as a whole has a bucket 4x as big; a flood over budget is dropped whole
-  (`dropped_flood`). `--flood-rate 0` turns the flood cap off, `--no-rate`
+  hub as a whole has a bucket 4x as big, which is charged only for senders that
+  have already used more than half of their own budget, so a few heavy senders
+  can empty it but never stop a quiet client's ARP; a flood over budget is
+  dropped whole (`dropped_flood`). Trunks are not limited (see above). `--flood-rate 0` turns the flood cap off, `--no-rate`
   turns off both. Known unicast is never charged as a flood.
 - Counters are printed to stderr on SIGUSR1 and on exit (SIGINT/SIGTERM).
 - `--verbose` logs client joins/leaves and one line per frame.
@@ -95,9 +115,11 @@ after it goes quiet. So an attacker cannot take a MAC from a running guest
 owner out either), and a restarted guest waits at most 15 s after its old
 process stopped. What it does not cover: a client that sends no hello and
 stays silent for 15 s (a QEMU endpoint, which never sends hellos) can have its
-MAC taken over; use `--mac-move=allow` or a keyed hub for those. A hub
-chain by `--connect` must remain a tree (as before), then no MAC legitimately
-appears on two ports at once.
+MAC taken over; use `--mac-move=allow` for those (QEMU cannot join a keyed
+hub at all). A hub chain by `--connect` must remain a tree (as before), then
+no MAC legitimately appears on two ports at once. One consequence: a guest
+that restarts on the *other* side of a trunk is blocked until its old entry
+ages out (`--mac-timeout`), because the trunk owner is always live.
 
 ### Authentication (`--key-file`)
 
@@ -119,8 +141,17 @@ accepts a hello whose time is within `--auth-window` seconds of its own clock
 matches. The sender's UDP address then becomes a client; frames are unchanged
 (no per-frame header) and are accepted from known client addresses only.
 Datagrams from any other address, including empty hellos and frames, are
-dropped (`dropped_unauth`). A client must resend the keyed hello within the
-client timeout (the emulator does it every 5 s). `--connect` sends keyed
+dropped (`dropped_unauth`). **Only a keyed hello keeps a client alive**: frames
+do not refresh it, and a client without a valid hello inside
+`--client-timeout` expires. A hello must also carry a timestamp newer than the
+last one accepted from that address (a repeat is `dropped_replay`), so a
+captured hello cannot be used to stay in. The hub answers each accepted hello
+with an empty datagram (keyed hubs only; an unkeyed hub never answers), which
+the emulator and a `--connect` uplink use to tell that key and clocks are right.
+The emulator sends a keyed hello every 5 s from a timer thread, so a paused
+emulation (debugger, host sleep) keeps its place; if nothing has answered after
+30 s it prints a one-time hint, and so does a hub whose uplink is silent
+(`--hint-after`). `--connect` sends keyed
 hellos when the hub has a key, so a keyed tree needs the same key everywhere.
 The emulator side: `--eth=hub:HOST:PORT,key=FILE` or the environment variable
 `MAXIVMAC_HUB_KEY_FILE` (the option wins), same file rules.
@@ -134,11 +165,15 @@ casual abuse, not a secure channel):
 - *No confidentiality or integrity*: frames travel in clear and are not
   authenticated per datagram. Anyone who can read the traffic sees the LAN.
 - *Replay*: a captured hello is valid for `--auth-window` (60 s) from any
-  source address (the tag does not cover the address because NAT and Docker
-  hide the client's real one). Someone who can sniff the path can join.
-- *Source spoofing after joining*: once a client address is registered, anyone
-  who can forge that UDP source address can inject frames as it, for as long
-  as it lives, and can keep it alive.
+  *other* source address (the tag does not cover the address because NAT and
+  Docker hide the client's real one), and the client that replay creates
+  expires `--client-timeout` after it (about two minutes in all) unless the
+  attacker keeps replaying newer captured hellos, which needs sniffing the
+  path all the time. A hello cannot be replayed from the address that sent it.
+  Someone who can sniff the path can therefore join.
+- *Source spoofing after joining*: while a client is registered (it expires
+  without fresh hellos, which a spoofer cannot make), anyone who can forge that
+  UDP source address can inject frames as it.
 - *A shared key*: all clients have the same secret; there is no revocation
   other than changing it everywhere.
 - *CPU*: every 13-byte datagram starting with 0xE7 costs one HMAC to check.
@@ -146,8 +181,15 @@ casual abuse, not a secure channel):
 - *UDP floods* that merely fill the socket or the network path.
 
 Use `--allow` as well, and a VPN/SSH tunnel or a trusted LAN when any of that
-matters. The key must also not be passed on a command line (it is a file for
-that reason).
+matters. The key is never passed on a command line (it is a file for that
+reason). The hub and the emulator open it without blocking, require a regular
+file owned by the running user with no group/other permission bits, warn about
+a key that is one repeated byte, and wipe their copies of the secret (the HMAC
+pads are derived once at start and the key buffer is zeroed at once). **QEMU
+cannot join a keyed hub at all**: it cannot send the keyed hello, and an
+`--allow` rule does not help because the keyed hub drops everything from an
+address that has not sent one. Put a QEMU endpoint on an unkeyed hub (with
+`--allow`) and connect that hub to the keyed one with `--connect`/`--trunk`.
 
 ### Security
 
@@ -295,6 +337,7 @@ Ethernet frame per datagram with no extra header, which is what ethhub uses,
 and QEMU would join by sending to the hub's address. This has **not** been
 tested here: no QEMU was run against ethhub. In particular the hello/keepalive
 (zero-length datagram) is an ethhub convention that QEMU does not emit, so a
-QEMU endpoint only becomes known to the hub when it first sends a frame, and
+QEMU endpoint only becomes known to the hub when it first sends a frame (and a
+keyed hub never admits it, see Authentication), and
 it would also age out after the client timeout unless it keeps sending; use a
 long `--client-timeout` or a small helper that sends keepalives.

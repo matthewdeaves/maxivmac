@@ -671,7 +671,7 @@ fail against the old hub) and `test/test_eth_hub.cpp`.
   `--eth=hub:HOST:PORT,key=FILE` (or `MAXIVMAC_HUB_KEY_FILE`). The wire is
   unchanged without a key, and frames never change, so the QEMU dgram goal
   stands; a QEMU endpoint cannot join a keyed hub (it cannot send the hello),
-  use `--allow` for those.
+  put it on an unkeyed hub (with `--allow`) and `--connect`/`--trunk` that to the keyed one (F47).
 - **Threat model (see ETHHUB.md):** stops casual LAN abuse (join, read floods,
   inject, fill tables, reflect). Does not stop anyone who can sniff (replay of
   a hello for 60 s from any address, since NAT hides the client's address, and
@@ -685,3 +685,48 @@ fail against the old hub) and `test/test_eth_hub.cpp`.
   `dropped_unauth=0`. R2/R3 were not run.
 - **Not verified:** a hub and an emulator on two machines with skewed clocks;
   QEMU; a rate-limited or MAC-pinned guest under real load.
+
+### F47. ethhub review round: pinning bypass, trunks, replay, hellos on the emulation tick
+
+An independent review of F43 to F46 found these; all fixed, each with tests in
+`tools/ethhub/test/test_ethhub.py` and `test/test_eth_hub.cpp`.
+
+- **MAC pinning could be bypassed and then used to lock a victim out.** A full
+  MAC table evicted the LRU entry whatever its owner; ~1000 frames with random
+  source MACs pushed a victim's entries out, then the attacker took the MAC and
+  the victim's frames were dropped. Fixed: a full table only gives up entries of
+  dead owners, of the learning client itself, or (for a trunk) anything; else
+  the frame is dropped (`dropped_macfull`). A client holds at most
+  `--max-macs-per-client` (8) entries and replaces its own oldest. A live
+  owner's keepalives now keep its entries from ageing out. A trunk may take a
+  MAC back, and a trunk owner is always live (so a quiet host stack stays
+  protected).
+- **Trunks.** The TAP, the `--connect` uplink and clients named by `--trunk`
+  are exempt from the rate limit, the flood cap and the per-client MAC cap. A
+  child hub that is not listed with `--trunk` is one ordinary client at the
+  parent and is limited as such (documented, tested).
+- **Global flood bucket** (4x per client) let a few clients starve everyone's
+  broadcasts. It is now charged only for senders already past half of their own
+  budget, so quiet clients are never refused because of heavy ones.
+- **Keyed membership was permanent.** After one hello every datagram from the
+  address refreshed it. Now only a keyed hello keeps a client alive, and it must
+  be newer than the last accepted from that address (`dropped_replay`). The hub
+  answers an accepted keyed hello with an empty datagram (keyed hubs only; the
+  wire is unchanged for unkeyed ones).
+- **Keepalives rode the 60 Hz emulation tick**, so a paused emulation (debugger,
+  host sleep) was dead to the hub after 15 s. A timer thread on the real clock
+  sends them now (an injected wall clock, as in the tests, still uses poll()).
+  A one-time hint is printed by the emulator (no answer to keyed hellos in 30 s)
+  and by a hub whose uplink is silent (`--hint-after`): wrong key, one side
+  unkeyed, clocks apart.
+- **Key handling:** opened non-blocking, must be a regular file owned by the
+  running user, warning for a one-byte-repeated key, secrets and HMAC pads wiped
+  (the hub derives the pads once and zeroes the key at once).
+- **Defaults that could break setups:** the per-IP cap (16) no longer applies to
+  loopback unless `--max-per-ip` is given; a refusal is logged (once per 10 s).
+- **Docs corrected:** QEMU cannot join a keyed hub at all (the old text
+  suggested `--allow` for it).
+- **Not done:** a per-IP counter (the cap still scans the client table on a new
+  client; at most 4096 entries); the HMAC cost of a flood of fake keyed hellos
+  is not limited.
+
