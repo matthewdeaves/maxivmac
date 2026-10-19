@@ -2,6 +2,7 @@
 #include "classic/mac_codes.h"
 #include "classic/mac_time.h"
 #include "core/diag.h"
+#include "util/data_path.h"
 #include "platform/common/path_utils.h"
 #include "util/macroman.h"
 
@@ -156,7 +157,7 @@ bool HostVolume::mount(const std::filesystem::path &hostDir)
 	static bool s_typesLoaded = false;
 	if (!s_typesLoaded)
 	{
-		appledouble::LoadTypeMappings("data/debug/typemap.def");
+		appledouble::LoadTypeMappings(ResolveDataPath("data/debug/typemap.def"));
 		s_typesLoaded = true;
 	}
 
