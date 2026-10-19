@@ -326,3 +326,23 @@ TEST_CASE("daynaport: random register traffic never crashes")
 		if (i % 1000 == 0) r.c.reset();
 	}
 }
+
+// ---- fixes over the donor implementation ----
+
+TEST_CASE("daynaport: a frame too big for the READ is dropped, receive goes on")
+{
+	// The driver never sends REQUEST SENSE and retries with the same length, so
+	// a frame that is refused but kept would wedge the receive path forever.
+	DnRig r;
+	r.enable();
+	Bytes f = makeFrame(200, 0x33);
+	r.eth->inject(f);
+	Bytes h = r.read(0x08, 100, 0xC0, 6); // 100 < 6 + 200 + 4: empty header, GOOD
+	CHECK(h == Bytes(6, 0));
+	CHECK(r.eth->queued() == 0); // dropped, not stuck at the head of the queue
+	// the next frame, which does fit, is delivered by the same READ length
+	Bytes g = makeFrame(60, 0x44);
+	r.eth->inject(g);
+	Bytes b = r.read(0x08, 100, 0xC0, 6 + 60 + 4);
+	CHECK(Bytes(b.begin() + 6, b.begin() + 66) == g);
+}
