@@ -186,7 +186,8 @@ echo "=============================="
 
 SERVER_PID=""
 cleanup() {
-    rm -f /tmp/maxivmac-dbg-*.sock
+    # only our own socket: a glob would delete the sockets of every other running emulator
+    [ -n "$SERVER_PID" ] && rm -f "/tmp/maxivmac-dbg-${SERVER_PID}.sock"
     [ -n "$SERVER_PID" ] && kill $SERVER_PID 2>/dev/null || true
 }
 trap cleanup EXIT
