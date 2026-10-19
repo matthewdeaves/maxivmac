@@ -157,12 +157,14 @@ class Run:
         folder = ("click 82 105 hold 200ms\nwait for 1s\nclick 82 105 hold 200ms\nwait for 6s\n"
                   'screenshot "n_folder"\n')
         if self.cfg["app"] == "ping":
-            s += 'screenshot "E2E_READY"\n# the container pings the guest now\nwait for 200s\n'
             s += folder
             s += inc("launch").split('screenshot "n_folder"\n', 1)[1]   # MacTCP Ping (110,105)
             s += (inc("ping").replace("10.0.2.2", self.tap_ip)
                   .replace("z1_gw_done", "E2E_PING_DONE"))
-            s += "wait for 5s\n"
+            # MacTCP answers ARP and ICMP only once an application has opened it (here
+            # Ping, which stays open): the container pings the guest now.  The driver
+            # ends the emulator when that is done; this wait is only a ceiling.
+            s += "wait for 6000s\n"
         else:
             s += folder
             # test_mesh is the third icon of "Net Tools" (MacTCP Ping, test_chat, test_mesh)
@@ -221,7 +223,7 @@ class Run:
         script = self.build_script()
         open(self.path("run.dbg"), "w").write(script)
         speed = os.environ.get("E2E_SPEED", "")   # "": the emulator's default (--speed=4); see the docs
-        emu = self.spawn(["maxivmac", "--headless", "--silent", "--model=MacPlus", "--rom=" + ROM]
+        emu = self.spawn(["stdbuf", "-oL", "-eL", "maxivmac", "--headless", "--silent", "--model=MacPlus", "--rom=" + ROM]
                          + (["--speed=" + speed] if speed else []) + ["--scsi4=daynaport", "--eth=hub:127.0.0.1:%d" % HUB_PORT,
                           "--eth-mac=" + GUEST_MAC, "--dbg-script=" + self.path("run.dbg"), disk],
                          "emulator.out", env={"MAXIVMAC_OUT_DIR": self.shots})
@@ -229,14 +231,17 @@ class Run:
         host_ping = None
         deadline = time.time() + int(os.environ.get("E2E_RUNG_TIMEOUT", "1500"))
         while emu.poll() is None and time.time() < deadline:
-            if self.name == "r1" and host_ping is None and os.path.exists(os.path.join(self.shots, "E2E_READY.png")):
-                self.mark("guest_ready")
+            if self.name == "r1" and host_ping is None and os.path.exists(os.path.join(self.shots, "E2E_PING_DONE.png")):
+                self.mark("guest_ping_done")
                 time.sleep(3)
                 host_ping = subprocess.run(["ping", "-c", "5", "-i", "1", "-W", "3", self.guest_ip],
                                            capture_output=True, text=True)
                 open(self.path("host-ping.txt"), "w").write(host_ping.stdout + host_ping.stderr)
+                self.mark("host_ping_done")
+                time.sleep(1)
+                break
             time.sleep(0.5)
-        timed_out = emu.poll() is None
+        timed_out = emu.poll() is None and not (self.name == "r1" and host_ping is not None)
         self.terminate(emu)
         self.mark("emulator_exit")
         time.sleep(1)
@@ -249,8 +254,12 @@ class Run:
         self.terminate(hub)
         self.mark("done")
 
-        self.check("emulator_script_completed", (not timed_out) and emu.returncode == 0,
-                   "exit %s%s" % (emu.returncode, " (rung timeout)" if timed_out else ""))
+        if self.name == "r1":     # ended by the driver after the container's ping, not by the script
+            self.check("emulator_script_completed", not timed_out and os.path.exists(os.path.join(self.shots, "E2E_PING_DONE.png")),
+                       "the script reached E2E_PING_DONE (every `wait` before it was met)%s" % (" (rung timeout)" if timed_out else ""))
+        else:
+            self.check("emulator_script_completed", (not timed_out) and emu.returncode == 0,
+                       "exit %s%s" % (emu.returncode, " (rung timeout)" if timed_out else ""))
         self.analyse(host_ping)
         # the disk after the run, for the host-side PT_Log cross-check (hfsutils is not in the image)
         with open(disk, "rb") as f, gzip.open(self.path("disk-after.hfs.gz"), "wb", 6) as g:
@@ -275,9 +284,9 @@ class Run:
             self.check("guest_ping_hub", len(req) >= 5 and len(rep) >= 5,
                        "guest->%s echo requests %d, replies from the container kernel %d" % (self.tap_ip, len(req), len(rep)))
             self.check("guest_ping_screen", self.screen_text_seen("5/5/0/0"),
-                       "MacTCP Ping window tally 5/5/0/0 (script `wait text`; emulator exit 0)")
+                       "MacTCP Ping drew the tally 5/5/0/0 (the guest's DrawString, echoed by showtext)")
             if host_ping is None:
-                self.check("host_ping_guest", False, "E2E_READY marker never appeared")
+                self.check("host_ping_guest", False, "E2E_PING_DONE marker never appeared")
             else:
                 m = re.search(r"(\d+) packets transmitted, (\d+) (?:packets )?received", host_ping.stdout)
                 recv = int(m.group(2)) if m else 0
