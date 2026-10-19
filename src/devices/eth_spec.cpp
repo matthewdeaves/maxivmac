@@ -6,6 +6,9 @@
 
 #include <cctype>
 #include <charconv>
+#include <string>
+
+#include "debugger/duration.h"
 
 namespace
 {
@@ -104,6 +107,35 @@ bool parseMac(std::string_view s, std::array<uint8_t, 6> &out)
 	}
 	if (m[0] & 1) return false; // group address cannot be a station address
 	out = m;
+	return true;
+}
+
+bool parseEthLatency(std::string_view s, uint64_t unitsPerSecond, uint64_t &out, std::string &err)
+{
+	auto fail = [&](const char *why) {
+		err = "bad --eth-latency '" + std::string(s) + "' (" + why + "; use e.g. 2ms, 500us, 0)";
+		return false;
+	};
+	if (s == "0" || s == "off" || s == "none")
+	{
+		out = 0;
+		return true;
+	}
+	size_t digits = 0;
+	while (digits < s.size() && s[digits] >= '0' && s[digits] <= '9') digits++;
+	const std::string_view unit = s.substr(digits);
+	if (digits == 0 || digits > 7) return fail("expected a duration");
+	uint64_t units = 0;
+	if (unit == "us")
+		units = std::stoull(std::string(s.substr(0, digits))) * unitsPerSecond / 1'000'000;
+	else if (unit == "ms" || unit == "s")
+	{
+		if (!ParseDuration(s, unitsPerSecond, units)) return fail("expected a duration");
+	}
+	else
+		return fail("needs a unit: s, ms or us");
+	if (units > unitsPerSecond) return fail("at most 1s");
+	out = units;
 	return true;
 }
 

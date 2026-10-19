@@ -38,6 +38,7 @@ struct MacFileEntry
 	std::array<std::string, 7> scsiTargets;
 	std::string eth;
 	std::string ethMac;
+	std::string ethLatency;
 	std::vector<std::string> netRedirs;
 
 	// Icon (optional PNG path, resolved after validation)

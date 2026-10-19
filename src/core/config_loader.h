@@ -56,6 +56,7 @@ struct LaunchConfig
 	std::array<std::string, 7> scsiTargets; // --scsiN=daynaport|none (N = SCSI ID 0..6)
 	std::string eth;						// --eth=slirp[,hostfwd=tcp::HOSTPORT-GUESTIP:GUESTPORT]
 	std::string ethMac;						// --eth-mac=xx:xx:xx:xx:xx:xx
+	std::string ethLatency;					// --eth-latency=2ms (emulated time; "" = default, 0 = off)
 
 	// Shared drives
 	std::vector<std::string> sharedDirs; // --shared <path> (repeatable)

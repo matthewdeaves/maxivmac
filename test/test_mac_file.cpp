@@ -436,6 +436,7 @@ TEST_CASE("ParseMacFile: scsiN, eth, eth-mac and net-redir keys")
 				  "scsi0 = none\n"
 				  "eth = slirp,hostfwd=tcp::8080-:80\n"
 				  "eth-mac = 02:00:00:aa:bb:cc\n"
+				  "eth-latency = 3ms\n"
 				  "net-redir = tcp:8081:10.0.2.15:81\n"
 				  "net-redir = udp:53:10.0.2.15:53\n",
 				  e, err));
@@ -444,11 +445,13 @@ TEST_CASE("ParseMacFile: scsiN, eth, eth-mac and net-redir keys")
 	CHECK(e.scsiTargets[1].empty());
 	CHECK(e.eth == "slirp,hostfwd=tcp::8080-:80");
 	CHECK(e.ethMac == "02:00:00:aa:bb:cc");
+	CHECK(e.ethLatency == "3ms");
 	CHECK(e.netRedirs.size() == 2);
 
 	LaunchConfig lc = LaunchConfigFromMacEntry(e, "/data");
 	CHECK(lc.scsiTargets[4] == "daynaport");
 	CHECK(lc.eth == e.eth);
 	CHECK(lc.ethMac == e.ethMac);
+	CHECK(lc.ethLatency == "3ms");
 	CHECK(lc.netRedirs == e.netRedirs);
 }

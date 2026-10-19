@@ -273,6 +273,10 @@ bool ParseMacFileFromString(std::string_view content, std::string_view path, Mac
 		{
 			out.ethMac = std::string(val);
 		}
+		else if (key == "eth-latency")
+		{
+			out.ethLatency = std::string(val);
+		}
 		else if (key == "net-redir")
 		{
 			out.netRedirs.push_back(std::string(val));

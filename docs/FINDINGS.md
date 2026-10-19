@@ -247,3 +247,15 @@ the branch that found them.
   host Reboot action too. Not restored: images the user added later. Covered
   by `test/scripts/restart_keeps_disk.dbg` (fails without the fix: the boot
   never gets past the "?"). See `src/devices/SONY.md` 5.6.
+
+### F22. MacTCP Ping loses replies that arrive before the send call returns
+
+- **Symptom:** over `--eth=slirp` the first echo got a reply, echo #2 and later
+  "timed out" although each reply was delivered: slirp answers synchronously,
+  so the READ right after the WRITE already returns the reply (zero empty
+  polls in the trace). The cause inside MacTCP / Ping was not found; a hold-off
+  proved the race.
+- **Status:** fixed in the emulator: received frames are held for a minimum
+  time on the emulated clock (`--eth-latency`, default 2 ms; `EthLatency`).
+  See `docs/features/NETWORKING_DAYNAPORT.md`. Whether 2 ms is enough for
+  other MacTCP clients is not known; `--eth-latency=` raises it.

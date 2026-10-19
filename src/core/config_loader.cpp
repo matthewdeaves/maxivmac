@@ -180,6 +180,8 @@ void PrintUsage(const char *progname)
 			"                   --dbg-script, so scripted runs stay repeatable.  Give --eth=slirp for\n"
 			"                   a live link there.  Forwards listen on 127.0.0.1 unless HOSTIP is given.\n"
 			"  --eth-mac=MAC    DaynaPORT MAC address (default 02:6d:78:76:6d:01)\n"
+			"  --eth-latency=D  Minimum delay of received frames on the emulated clock\n"
+			"                   (default 2ms; e.g. 500us, 1s; 0 = off)\n"
 			"  --net-redir=SPEC Port forward for slirp (SLIP or --eth): tcp:hostport:guestip:guestport\n"
 			"                   (--slip-redir is an alias)\n"
 			"  --shared=PATH    Mount host directory as shared drive (repeatable)\n"
@@ -390,6 +392,11 @@ LaunchConfig ParseCommandLine(int argc, char *argv[])
 		if (strncmp(arg, "--eth-mac=", 10) == 0)
 		{
 			lc.ethMac = arg + 10;
+			continue;
+		}
+		if (strncmp(arg, "--eth-latency=", 14) == 0)
+		{
+			lc.ethLatency = arg + 14;
 			continue;
 		}
 		if (strncmp(arg, "--scsi", 6) == 0 && arg[6] >= '0' && arg[6] <= '6' && arg[7] == '=')
@@ -687,6 +694,7 @@ LaunchConfig LaunchConfigFromMacEntry(const MacFileEntry &entry, std::string_vie
 	lc.scsiTargets = entry.scsiTargets;
 	lc.eth = entry.eth;
 	lc.ethMac = entry.ethMac;
+	lc.ethLatency = entry.ethLatency;
 	lc.netRedirs = entry.netRedirs;
 
 	if (entry.speed >= 0) lc.speed = entry.speed;

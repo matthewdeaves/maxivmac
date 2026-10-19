@@ -131,7 +131,14 @@ TEST_CASE("cli: --scsiN, --eth and --eth-mac")
 	CHECK(lc.scsiTargets[6].empty());
 	CHECK(lc.eth == "slirp,hostfwd=tcp::8080-:80");
 	CHECK(lc.ethMac == "02:00:00:aa:bb:cc");
+	CHECK(lc.ethLatency.empty());
 	CHECK(lc.diskPaths.empty()); // none of them was mistaken for a disk image
+}
+
+TEST_CASE("cli: --eth-latency")
+{
+	CHECK(parseArgs({"--eth-latency=5ms"}).ethLatency == "5ms");
+	CHECK(parseArgs({"--eth-latency=0"}).ethLatency == "0");
 }
 
 TEST_CASE("cli: --net-redir and its former name --slip-redir feed the same list")

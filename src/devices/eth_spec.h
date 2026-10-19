@@ -10,6 +10,7 @@
 	      GUESTIP empty = the guest address
 	  --net-redir=tcp:HOSTPORT:GUESTIP:GUESTPORT   (legacy form, also udp)
 	  --eth-mac=xx:xx:xx:xx:xx:xx
+	  --eth-latency=2ms | 500us | 0 | off
 */
 #pragma once
 
@@ -35,6 +36,13 @@ bool parseHostFwd(std::string_view s, HostFwdSpec &out);
 bool parseNetRedir(std::string_view s, HostFwdSpec &out);
 // "02:00:00:aa:bb:cc" (':' or '-'); rejects multicast (bit 0 of the first octet).
 bool parseMac(std::string_view s, std::array<uint8_t, 6> &out);
+
+// --eth-latency=DURATION: minimum delay before a received frame is visible to
+// the guest, on the emulated clock.  "2ms", "500us", "1s", or "0"/"off"/"none"
+// for no delay.  A bare non-zero number is refused (no unit to read it in), as
+// are the raw-cycle suffixes of script durations.  `unitsPerSecond` is the
+// emulated clock's rate; `out` is in those units.  At most 1 s.
+bool parseEthLatency(std::string_view s, uint64_t unitsPerSecond, uint64_t &out, std::string &err);
 
 struct EthSpec
 {

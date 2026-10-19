@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "devices/eth_factory.h"
+#include "devices/eth_latency.h"
 #include "devices/eth_spec.h"
 #include "devices/scsi_daynaport.h"
 
@@ -47,6 +48,18 @@ std::unique_ptr<scsi::ScsiTarget> CreateScsiTarget(const std::string &typeSpec, 
 			fprintf(stderr, "[SCSI] ID %d: headless/script run without --eth: link down (--eth=slirp for a live link)\n", id);
 		}
 		auto eth = CreateEthBackend(ethSpec, opt.redirs);
+		if (opt.clock && opt.clockUnitsPerSecond)
+		{
+			uint64_t lat = 0;
+			std::string err;
+			if (!parseEthLatency(opt.ethLatency.empty() ? kDefaultEthLatency : opt.ethLatency,
+								 opt.clockUnitsPerSecond, lat, err))
+			{
+				fprintf(stderr, "[SCSI] ID %d: %s; using %s\n", id, err.c_str(), kDefaultEthLatency);
+				parseEthLatency(kDefaultEthLatency, opt.clockUnitsPerSecond, lat, err);
+			}
+			if (lat) eth = std::make_unique<EthLatency>(std::move(eth), opt.clock, lat);
+		}
 		fprintf(stderr, "[SCSI] ID %d: DaynaPORT SCSI/Link, MAC %02x:%02x:%02x:%02x:%02x:%02x, backend %s\n", id,
 				mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], eth->name());
 		return std::make_unique<DaynaPortTarget>(std::move(eth), mac, topt);

@@ -518,6 +518,7 @@ void SetLaunchConfig(const LaunchConfig &lc)
 		if (!lc.scsiTargets[i].empty()) s_launchConfig.scsiTargets[i] = lc.scsiTargets[i];
 	if (!lc.eth.empty()) s_launchConfig.eth = lc.eth;
 	if (!lc.ethMac.empty()) s_launchConfig.ethMac = lc.ethMac;
+	if (!lc.ethLatency.empty()) s_launchConfig.ethLatency = lc.ethLatency;
 
 	s_machineConfig = BuildMachineConfig(s_launchConfig);
 	s_emulatorConfig = BuildEmulatorConfig(s_launchConfig);

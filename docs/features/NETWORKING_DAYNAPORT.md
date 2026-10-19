@@ -21,11 +21,12 @@ maxivmac --model=MacPlus --scsi4=daynaport \
 | `--eth=slirp[,hostfwd=...]` | Backend. `slirp` is user-mode NAT; `none` is a cable that is out. **Default:** `slirp` in an interactive run (when built with libslirp), `none` with `--headless` or `--dbg-script`. libslirp runs on the host clock and real sockets, so a live link would make scripted runs non-deterministic; give `--eth=slirp` explicitly to get one there (a note is printed when the default applies). |
 | `hostfwd=tcp:[HOSTIP]:HOSTPORT-GUESTIP:GUESTPORT` | Host-to-guest forward, TCP or `udp`; `GUESTIP` may be empty (= 10.0.2.15). `HOSTIP` is the host address to listen on, a dotted quad; **empty means 127.0.0.1**, so the forward is reachable from this machine only. `0.0.0.0` (or an interface address) exposes it to the network and prints a warning. Repeatable. |
 | `--eth-mac=xx:xx:xx:xx:xx:xx` | Adapter MAC. Default `02:6d:78:76:6d:01` (locally administered). A guest can override it with the driver's set-MAC command. |
+| `--eth-latency=DURATION` | Minimum delay before a received frame is visible to the guest, measured on the **emulated** clock. Default `2ms`; `500us`, `1s` (at most one second); `0` or `off` disables. A unit is required. See "Receive latency" below. |
 | `--net-redir=tcp:HOST:GUESTIP:GUEST` | Older form of host forward (loopback only, no host address). Applies to `--eth=slirp` and to `--serial-a=slip`. `--slip-redir` is kept as an alias. |
 | `--diag=scsi` | Trace every CDB, data record and status the target sees. |
 
 The same settings exist as `.mac` file keys: `scsi0` ... `scsi6`, `eth`,
-`eth-mac`, and (repeatable) `net-redir`.
+`eth-mac`, `eth-latency`, and (repeatable) `net-redir`.
 
 slirp addressing (one `SlirpStack::Config` in the code): network 10.0.2.0/24,
 gateway 10.0.2.2, DNS 10.0.2.3, guest 10.0.2.15. Configure MacTCP manually with
@@ -123,6 +124,33 @@ retransmit in bursts ("retransmit storms"), and a stalled host leaves the guest
 believing the network is gone. Keep the speed at 1x for networking until this
 is measured with MacTCP. libslirp's timers are fired from `poll()` (their
 expiry is in milliseconds on the clock `clock_get_ns()` reports in nanoseconds).
+
+## Receive latency
+
+libslirp answers an ICMP echo or an ARP request inside `send()`, so the reply
+was already queued before the guest's WRITE had returned, and the very next
+READ delivered it. MacTCP Ping loses a reply that arrives that early: echo #2
+and later were logged as timeouts although every reply reached the guest
+(observed with System 6.0.8, MacTCP 2.0.6, MacTCP Ping 2.0.2; the first echo
+survives only because it goes out from MacTCP's deferred queue after the ARP
+exchange). A real LAN never answers within microseconds either.
+
+`EthLatency` (`src/devices/eth_latency.h`) is a decorator around any
+`EthernetBackend`. It time-stamps each received frame when it first sees it
+(right after every `send()`, and in `poll()`) and shows it to the target only
+`--eth-latency` later. The clock is the emulator's cycle counter
+(`g_ict.getCurrent()`), so the delay is guest time: deterministic for a given
+emulated run, independent of `--speed`, of the host clock and of how often the
+driver polls. Frame order is kept and the held queue is bounded like every
+backend's queue (64 frames, drop-oldest, counted in the lost-frames statistic).
+Backends stay simple (they know nothing about it); the factory
+(`CreateScsiTarget`) adds the decorator when a clock is supplied and the
+latency is not zero. Unit tests: `test/test_eth_latency.cpp` (fake clock,
+`FakeEthernet`, and a DaynaPORT READ after a WRITE).
+
+A latency also adds to real round-trip times (a ping through slirp shows
+about 2 ms more than the host path), which is harmless for the 1 s resolution
+of the classic TCP/IP tools.
 
 ## Limits
 

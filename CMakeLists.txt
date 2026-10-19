@@ -466,6 +466,7 @@ add_executable(tests
     src/devices/scsi_factory.cpp
     test/test_scsi_factory.cpp
     test/test_eth_spec.cpp
+    test/test_eth_latency.cpp
 )
 target_include_directories(tests PRIVATE "${CMAKE_SOURCE_DIR}/src" "${CMAKE_SOURCE_DIR}/libs" "${CMAKE_SOURCE_DIR}/libs/stb" "${CMAKE_SOURCE_DIR}/tools/icon_extract")
 target_compile_options(tests PRIVATE -Wall -Wextra -Werror -UNDEBUG)

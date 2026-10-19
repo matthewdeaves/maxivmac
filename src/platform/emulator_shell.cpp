@@ -29,6 +29,8 @@
 #include "devices/eth_spec.h"
 #include "devices/scsi.h"
 #include "devices/scsi_factory.h"
+#include "core/ict_scheduler.h"
+#include "debugger/cmd_script.h"
 #include "platform/sdl_sound.h"
 #if HAVE_SLIRP
 #include "devices/serial_slirp.h"
@@ -325,6 +327,9 @@ bool EmulatorShell::initMachine()
 			opt.eth = slc.eth;
 			opt.redirs = slc.netRedirs;
 			opt.ethMac = slc.ethMac;
+			opt.ethLatency = slc.ethLatency;
+			opt.clock = []() { return static_cast<uint64_t>(g_ict.getCurrent()); };
+			opt.clockUnitsPerSecond = ScriptUnitsPerSecond();
 			opt.unattended = slc.headless || !slc.dbgScripts.empty();
 			for (int id = 0; id < 7; ++id)
 			{
