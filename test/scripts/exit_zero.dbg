@@ -1,0 +1,4 @@
+# exit 0 ends the run early and successfully.
+wait for 100ms
+exit 0
+fail "not reached"

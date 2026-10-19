@@ -511,7 +511,7 @@ void CmdScreenshot(Debugger &dbg, const std::vector<Token> &args)
 	}
 	std::string path = ScriptOutputPath(args[0].text);
 	if (SaveScreenshot(path))
-		dbg.io().write("Screenshot saved: %s\n", path.c_str());
+		dbg.io().write("Screenshot saved: %s\n", AbsoluteOutputPath(path).c_str());
 	else
 	{
 		dbg.io().write("Error: failed to save screenshot to '%s'\n", path.c_str());

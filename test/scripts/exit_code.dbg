@@ -1,0 +1,4 @@
+# exit <code> ends the run with that status; later lines do not run.
+log "about to exit"
+exit 3
+fail "not reached"

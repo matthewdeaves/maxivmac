@@ -90,6 +90,10 @@ expect "unknown command exits 2"           bad_command.dbg       2 "FAIL"
 expect "bad timeout exits 2"               bad_wait_arg.dbg      2 "cannot parse timeout"
 expect "mouse commands parse and run"      mouse_cmds.dbg        0 "script completed"
 
+expect "exit <code> sets the exit status"          exit_code.dbg         3 "Exiting with code 3"
+expect "exit 0 ends the run early"                 exit_zero.dbg         0 "Exiting with code 0"
+expect "screenshot prints the absolute path"       shot_path.dbg         0 "Screenshot saved: /.*shot_path_test.png"
+
 run /nonexistent/script.dbg
 if [ "$RC" -eq 2 ]; then pass "missing script exits 2"; else fail "missing script exits 2" "exit $RC"; fi
 

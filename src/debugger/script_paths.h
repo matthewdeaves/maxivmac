@@ -12,6 +12,10 @@
 // (absolute names are left alone).  Pure; see ScriptOutputPath().
 std::string ResolveOutputPath(std::string_view name, std::string_view outDir);
 
+// The same path made absolute (against the current directory), so a message
+// can name the file whatever the cwd.  Pure.
+std::string AbsoluteOutputPath(const std::string &path);
+
 // ResolveOutputPath() with outDir taken from $MAXIVMAC_OUT_DIR, creating the
 // destination directory when needed.  Without the variable, relative names
 // are relative to the current directory.

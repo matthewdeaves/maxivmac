@@ -509,7 +509,8 @@ screenshot "label"
 ```
 
 Save the current framebuffer as `label.png` (the `.png` is added if the
-name has no extension).  A relative name is written under
+name has no extension) and print the file it wrote, as an absolute path,
+on stdout: `Screenshot saved: /out/label.png`.  A relative name is written under
 `$MAXIVMAC_OUT_DIR` when that environment variable is set (the directory
 is created), otherwise relative to the **current working directory** of
 the emulator process, not the script's directory.  An unwritable path
@@ -546,6 +547,17 @@ The script must wait for shutdown to complete:
 - Mac Plus/SE: displays "You may now switch off your Macintosh
   safely" — use `wait text` to detect it.
 - Mac II: powers off — use `wait off`.
+
+### exit
+
+```
+exit [code]
+```
+
+End the run with the given exit status (default 0) and print `Exiting with
+code N`.  Lines after it do not run.  Use `exit 0` to stop a script early
+and `exit N` to report your own status; `fail` is `exit 1` with a message,
+a screenshot and the failure context.
 
 ### fail
 

@@ -22,3 +22,12 @@ TEST_CASE("output path: absolute names are left alone")
 {
 	CHECK(ResolveOutputPath("/tmp/x", "/out") == "/tmp/x.png");
 }
+
+TEST_CASE("output path: absolute form for messages")
+{
+	CHECK(AbsoluteOutputPath("/tmp/x.png") == "/tmp/x.png");
+	auto rel = AbsoluteOutputPath("sub/./shot.png");
+	CHECK(rel.front() == '/');
+	CHECK(rel.size() > std::string("/sub/shot.png").size());
+	CHECK(rel.substr(rel.size() - 12) == "sub/shot.png");
+}

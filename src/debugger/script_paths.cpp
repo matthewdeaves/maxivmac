@@ -25,3 +25,10 @@ std::string ScriptOutputPath(const std::string &name)
 	if (!parent.empty()) fs::create_directories(parent, ec);
 	return out;
 }
+
+std::string AbsoluteOutputPath(const std::string &path)
+{
+	std::error_code ec;
+	auto abs = fs::absolute(fs::path(path), ec);
+	return ec ? path : abs.lexically_normal().string();
+}

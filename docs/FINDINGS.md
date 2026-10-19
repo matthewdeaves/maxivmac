@@ -138,6 +138,16 @@ the branch that found them.
   by about one tick (16.6 ms); the other scripts and the golden runs are
   unaffected (the goldens do not script keys).
 
+### S10. `exit`, `screenshot` and several scripts: already there, now pinned down
+
+- **Status:** `exit <code>` and multiple `--dbg-script` files turned out to
+  exist (the latter broken, see S5); `exit` was undocumented apart from the
+  status table. Added: `screenshot` prints the absolute path it wrote
+  (`Screenshot saved: /abs/label.png`, relative names used to print the
+  relative form), and tests for `exit 3`, `exit 0` and the printed path
+  (`exit_code.dbg`, `exit_zero.dbg`, `shot_path.dbg`;
+  `AbsoluteOutputPath` in `test/test_script_paths.cpp`). Documented `exit`.
+
 ## 2026-10: found during feat/scsi-bus
 
 ### F1. Legacy SCSI stub: SEL check only matches ICR == 0x04

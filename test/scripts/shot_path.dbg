@@ -1,0 +1,3 @@
+# screenshot prints the absolute path it wrote
+wait for 1s
+screenshot "shot_path_test"
