@@ -74,7 +74,7 @@ need() { # need NAME PATH PIN VERSION_STRING
     echo "tool  $name = $path  ($ver)" | tee -a "$OUT/versions.txt"
     case "$ver" in *"$pin"*) ;; *)
         echo "WARN: $name version '$ver' differs from pin '$pin'" >&2
-        [ "${SA_PIN_STRICT:-0}" = 1 ] && exit 2 ;;
+        if [ "${SA_PIN_STRICT:-0}" = 1 ]; then exit 2; fi ;;
     esac
 }
 metric() { echo "$1 $2" >> "$CURRENT"; }   # metric KEY VALUE
