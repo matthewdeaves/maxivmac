@@ -51,6 +51,8 @@ public:
 
 	virtual void busReset() = 0;
 	virtual void abort() {}
+	// Once per emulated tick (1/60 s); for targets with host I/O to pump.
+	virtual void tick() {}
 	virtual const char *name() const = 0;
 };
 } // namespace scsi
