@@ -118,9 +118,22 @@ void Sony_RememberStartupDisks()
 	s_startupDisks.set(std::move(paths));
 }
 
+static bool IsInsertedNow(const std::string &abs)
+{
+	for (DriveIndex i = 0; i < NumDrives; ++i)
+	{
+		if (!vSonyIsInserted(i) || g_driveNames[i] == nullptr) continue;
+		std::error_code ec;
+		if (std::filesystem::absolute(g_driveNames[i], ec).string() == abs) return true;
+	}
+	return false;
+}
+
 void Sony_RestoreStartupDisks()
 {
 	s_startupDisks.restore([](const std::string &p) {
+		// A reset that did not eject (the SE and later) leaves some inserted.
+		if (IsInsertedNow(p)) return true;
 		std::string copy = p;
 		const bool ok = Sony_Insert1(copy.data(), false);
 		if (!ok) fprintf(stderr, "Warning: could not re-insert %s after reset\n", p.c_str());

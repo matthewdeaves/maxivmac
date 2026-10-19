@@ -5,6 +5,8 @@
 #
 # Environment:
 #   MAXIVMAC_TEST_ROM   Mac Plus ROM   (default: data/roms/MacPlus.ROM)
+#   MAXIVMAC_TEST_ROM_SE  Mac SE ROM  (default: data/roms/MacSE.ROM; the SE test
+#                       is skipped without it)
 #   MAXIVMAC_TEST_DISK  bootable System 6 HFS image
 #                       (default: extras/disks/608.hfs, the verify.sh disk)
 #   MAXIVMAC_OUT_DIR    scratch dir for screenshots (default: a temp dir)
@@ -18,6 +20,9 @@ DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$DIR" || exit 1
 EMU="${1:-$DIR/bld/macos/maxivmac}"
 ROM="${MAXIVMAC_TEST_ROM:-$DIR/data/roms/MacPlus.ROM}"
+ROM_SE="${MAXIVMAC_TEST_ROM_SE:-$DIR/data/roms/MacSE.ROM}"
+RUN_MODEL=MacPlus  # model and ROM of run()/run_many(); the SE test switches them
+RUN_ROM="$ROM"
 DISK="${MAXIVMAC_TEST_DISK:-$DIR/extras/disks/608.hfs}"
 SCRIPTS="$DIR/test/scripts"
 
@@ -49,7 +54,7 @@ run() {
     # Deliberately run from an unrelated directory: data/ lookup must not
     # depend on the current directory.
     case "$script" in /*) ;; *) script="$SCRIPTS/$script" ;; esac
-    OUT="$(cd "$WORK" && "$EMU" --headless --silent --model=MacPlus --rom="$ROM" \
+    OUT="$(cd "$WORK" && "$EMU" --headless --silent --model=$RUN_MODEL --rom="$RUN_ROM" \
         --dbg-script="$script" $args 2>&1)"
     RC=$?
 }
@@ -59,7 +64,7 @@ run_many() {
     cp "$DISK" "$WORK/disk.hfs"
     flags=""
     for sc in "$@"; do flags="$flags --dbg-script=$sc"; done
-    OUT="$(cd "$WORK" && "$EMU" --headless --silent --model=MacPlus --rom="$ROM" \
+    OUT="$(cd "$WORK" && "$EMU" --headless --silent --model=$RUN_MODEL --rom="$RUN_ROM" \
         $flags "$WORK/disk.hfs" 2>&1)"
     RC=$?
 }
@@ -126,6 +131,15 @@ fi
 expect "key and type edit a new folder name" type_verify.dbg 0 "script completed" disk
 expect "pick Apple menu item" menu_pick.dbg 0 "script completed" disk
 expect "Restart boots from the same disk again" restart_keeps_disk.dbg 0 "script completed" disk
+# The SE (and later) reset the devices on RESET but keep the images inserted;
+# the mount state has to be forgotten too, else the ROM shows the "?" (F41).
+if [ -f "$ROM_SE" ]; then
+    RUN_MODEL=MacSE; RUN_ROM="$ROM_SE"
+    expect "Mac SE: Restart boots from the same disk again" restart_keeps_disk.dbg 0 "script completed" disk
+    RUN_MODEL=MacPlus; RUN_ROM="$ROM"
+else
+    skip "Mac SE: Restart boots from the same disk again" "SE ROM $ROM_SE not found (set MAXIVMAC_TEST_ROM_SE)"
+fi
 
 # --disk-snapshot: the guest may write, the image on the host must not change.
 if [ -f "$DISK" ]; then

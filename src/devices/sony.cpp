@@ -603,6 +603,12 @@ void SonyDevice::ejectAllDisks()
 
 void SonyDevice::reset()
 {
+	/* A guest reset forgets every mount.  On the Plus the host ejects and
+	   re-inserts the startup images (DoMacReset); on the SE and later the
+	   RESET instruction only resets the devices and the ROM runs again with
+	   the images still inserted, so they have to be offered to the reopened
+	   driver as pending inserts again, else the ROM shows the flashing "?". */
+	s_sonyMountedMask = 0;
 	s_delayUntilNextInsert = 0;
 	s_quitOnEject = false;
 	s_mountCallBack = 0;

@@ -14,6 +14,7 @@
 #include "debugger/bp_power.h"
 #include "platform/common/event_queue.h"
 #include "platform/host_pasteboard.h"
+#include "platform/platform.h"
 
 /* Device headers for ATT Device* dispatch */
 #include "devices/device.h"
@@ -74,6 +75,14 @@ void CustomReset()
 			other hardware compenents to
 			later reset the 68000.
 		*/
+	}
+	else
+	{
+		/* The SE and later keep running after RESET (the ROM starts again), so
+		   there is no DoMacReset: the guest's shutdown ejected the images, and
+		   the ROM would find no disk (flashing "?").  Bring the startup images
+		   back, as DoMacReset does for the Plus. */
+		Sony_RestoreStartupDisks();
 	}
 }
 
