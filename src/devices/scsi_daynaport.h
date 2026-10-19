@@ -44,6 +44,7 @@ public:
 		uint32_t rxFrames = 0;	  // frames delivered to the guest
 		uint32_t txFrames = 0;	  // frames sent to the backend
 		uint32_t txDropped = 0;	  // guest frames dropped (link down or backend refused)
+		uint32_t rxFiltered = 0;  // received frames not addressed to this adapter
 	};
 	const Stats &stats() const { return stats_; }
 	// Frames lost to receive-queue overflow in the backend.
@@ -51,11 +52,15 @@ public:
 
 	EthernetBackend &backend() { return *eth_; }
 	const Mac &mac() const { return mac_; }
+	const std::vector<Mac> &multicast() const { return multicast_; }
 
 private:
 	// Transfer buffer: bounds a packed READ and the largest DATA OUT.
 	static constexpr size_t kBufSize = 16384;
 
+	static constexpr size_t kMaxMulticast = 64;
+
+	bool accepts(std::span<const uint8_t> frame) const;
 	scsi::Step handle(uint8_t lun);
 	scsi::Step error(uint8_t senseKey);
 	scsi::Step dataIn(size_t n);
@@ -64,6 +69,8 @@ private:
 
 	std::unique_ptr<EthernetBackend> eth_;
 	Mac mac_;
+	std::vector<Mac> multicast_;
+	bool allMulticast_ = false;
 	std::array<uint8_t, 16> cdb_{};
 	std::vector<uint8_t> buf_ = std::vector<uint8_t>(kBufSize);
 	size_t length_ = 0;
