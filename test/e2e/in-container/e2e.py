@@ -12,7 +12,7 @@ Output: /out/<rung>/ (summary.json with per-check PASS/FAIL, logs, screenshots,
 the hub pcap, the disk after the run) and exit status 0 only if every rung passed.
 See docs/features/NETWORKING_E2E.md.
 """
-import glob, gzip, json, os, re, resource, shutil, signal, socket, struct, subprocess, sys, threading, time
+import glob, gzip, json, os, re, resource, shutil, signal, socket, struct, subprocess, sys, threading, time, zlib
 
 ROM = os.environ.get("E2E_ROM", "/in/rom/vMac.ROM")
 DISK_DIR = "/in/disk"
@@ -49,6 +49,12 @@ RUNGS = {
                 what="byte-order case: guest 10.88.0.20/8, peer 10.0.2.25/8 (native-int ranks disagree)"),
     "r4":  dict(guest="10.88.0.20/24", tap="10.88.0.10/24", peer="bombertalk", app="BomberTalk",
                 what="BomberTalk 68k in the guest lobby <-> POSIX/SDL BomberTalk: each side discovers and connects to the other"),
+    # R4 plus a game: the guest presses Return in the lobby (it is the one that sends
+    # MSG_GAME_START), both enter the game, and each moves and drops a bomb that the
+    # other side must receive (the POSIX peer is driven through sdlkeys.so's command file).
+    "r5":  dict(guest="10.88.0.20/24", tap="10.88.0.10/24", peer="bombertalk", app="BomberTalk",
+                game=True,
+                what="BomberTalk 68k <-> POSIX/SDL BomberTalk: start a game from the lobby, both reach the game screen, each sees the other's movement and bombs"),
     "r3b": dict(guest="10.88.0.20/8", tap="10.0.2.15/8", peer="test_mesh", app="test_mesh",
                 what="byte-order case as first specified: peer 10.0.2.15/8 (ranks agree under both readings)"),
 }
@@ -173,6 +179,8 @@ class Run:
             # Ping, which stays open): the container pings the guest now.  The driver
             # ends the emulator when that is done; this wait is only a ceiling.
             s += "wait for 6000s\n"
+        elif self.cfg.get("game"):
+            s += self.bt_game_script(launch("BomberTalk"))
         elif self.cfg["app"] == "BomberTalk":
             # Menu -> Play (Return).  BomberTalk polls GetKeys, so the press is held; the
             # lobby starts PeerTalk discovery and shows what it finds.
@@ -187,6 +195,63 @@ class Run:
                   'wait text "***" %ds\nwait for 2s\nscreenshot "E2E_APP_VERDICT"\nwait for 15s\n'
                   % self.app_wait())
         return s
+
+    def bt_game_script(self, launch):
+        # Menu -> lobby as in R4.  Then wait for the lobby to list the peer ("Press Return to
+        # Start" is only drawn once a peer is discovered), give the TCP mesh time to form and
+        # press Return: the guest is the one that sends MSG_GAME_START.  In the game it plays
+        # first (the driver starts the POSIX peer when the guest's bomb arrives there): player 1
+        # spawns at the top right, (13,1); (13,2) and (12,1) are free, (13,3) and (11,1) are
+        # blocks.  Down one tile, drop a bomb, back up, one tile left: out of the blast.
+        # Script time is emulated CPU time, 16 script seconds per second of guest clock at the
+        # default speed, and a tile takes 0.2 s: hence the short holds.  `key` only queues
+        # events, one after the other, so the sequence is one burst.
+        return (launch + "wait for 160s\nscreenshot \"E2E_BT_MENU\"\n"
+                "key return hold 2s\nwait for 160s\n"
+                'wait text "Press Return to Start" 3000s\nwait for 160s\nscreenshot "E2E_BT_LOBBY"\n'
+                "key return hold 2s\nwait for 320s\nscreenshot \"E2E_GAME_1\"\n"
+                "# the guest's own moves and bomb\n"
+                "key down hold 6s\nkey space hold 2s\nkey up hold 6s\nkey left hold 6s\n"
+                "wait for 80s\nscreenshot \"E2E_GAME_2\"\n"
+                "# stay in the game while the POSIX peer plays (the driver starts it on the guest's bomb)\n"
+                "wait for 320s\nscreenshot \"E2E_GAME_3\"\nwait for 320s\nscreenshot \"E2E_GAME_4\"\n")
+
+    def wait_capture(self, ip, needle, timeout):
+        """Wall time (since the run began) of the first debug-broadcast line from ip containing needle."""
+        end = time.time() + timeout
+        while time.time() < end and not self.stop.is_set():
+            with self.capture_lock:
+                for t, i, text in self.capture:
+                    if "@%s]" % ip in text and needle in text:
+                        return t
+            time.sleep(0.2)
+        return None
+
+    def press(self, *scancodes, secs):
+        """Hold SDL scancodes for the POSIX peer (sdlkeys.so re-reads the file every 40 ms)."""
+        open(self.path("peer-keys"), "w").write(" ".join(str(c) for c in scancodes))
+        time.sleep(secs)
+        open(self.path("peer-keys"), "w").write("")
+
+    def drive_posix_peer(self):
+        """R5: the POSIX peer (player 0, spawns top left at (1,1); (1,2) and (2,1) are free,
+        (1,3) and (3,1) are blocks) waits for the guest's bomb to arrive, then plays: down one
+        tile, bomb, back up, one tile right (out of the blast), and ends displaced from its
+        corner so the guest's last screenshots show it elsewhere."""
+        RIGHT, UP, DOWN, SPACE = 79, 82, 81, 44
+        open(self.path("peer-keys"), "w").write("")
+        if self.wait_capture(self.tap_ip, "Game started:", 900) is None:
+            return
+        self.mark("posix_in_game")
+        if self.wait_capture(self.tap_ip, "RX bomb placed P1", 900) is None:
+            return
+        self.mark("posix_got_guest_bomb")
+        time.sleep(0.3)
+        self.press(DOWN, secs=0.6); time.sleep(0.2)
+        self.press(SPACE, secs=0.2); time.sleep(0.2)
+        self.press(UP, secs=0.6); time.sleep(0.2)
+        self.press(RIGHT, secs=0.6)
+        self.mark("posix_moves_done")
 
     def app_wait(self):
         # Script time is counted in emulated CPU time, and the guest CPU runs 16x
@@ -234,6 +299,8 @@ class Run:
                 argv = [exe]
                 penv = {"SDL_VIDEODRIVER": "dummy", "SDL_AUDIODRIVER": "dummy",
                         "LD_PRELOAD": "/opt/bombertalk/sdlkeys.so", "SDLKEYS_AFTER_MS": "5000"}
+                if cfg.get("game"):
+                    penv["SDLKEYS_CMDFILE"] = self.path("peer-keys")
             else:
                 exe = "/opt/peers/%s/%s" % (variant, cfg["peer"])
                 argv = [exe, "--name", "POSIX", "--peers", "0", "--secs", "3600"]
@@ -244,6 +311,8 @@ class Run:
             self.peer_variant = variant
             peer = self.spawn(argv, "peer.log", env=penv, cwd=self.work)
             self.mark("peer_started")
+            if cfg.get("game"):
+                threading.Thread(target=self.drive_posix_peer, daemon=True).start()
 
         script = self.build_script()
         open(self.path("run.dbg"), "w").write(script)
@@ -440,9 +509,67 @@ class Run:
         cg = [l for l in g if "Connected to:" in l]
         cp = [l for l in p if "Connected to:" in l]
         self.check("both_sides_connected", cg and cp, "guest: %s | POSIX: %s" % (cg[0] if cg else "none", cp[0] if cp else "none"))
+        if self.cfg.get("game"):
+            self.analyse_game(g, p)
+            return
         shots = [n for n in ("E2E_BT_MENU", "E2E_BT_LOBBY", "E2E_BT_LOBBY2", "E2E_BT_LOBBY3")
                  if os.path.exists(os.path.join(self.shots, n + ".png"))]
         self.check("guest_lobby_screenshots", len(shots) == 4, "saved: %s (the lobby text is drawn by BomberTalk's own renderer, so the screenshots are for a human)" % ", ".join(shots))
+
+    def analyse_game(self, g, p):
+        """R5: the game started on both sides and each side saw the other's movement and bomb.
+        Player ids are ranks by address: the POSIX peer (10.88.0.10) is P0, the guest P1."""
+        def first(lines, *needles):
+            return next((l for l in lines if all(n in l for n in needles)), None)
+        gs = first(g, "Game started: 2 players, local=1")
+        ps = first(p, "Game started: 2 players, local=0")
+        self.check("guest_sends_game_start", first(g, "TX game start: 2 players"), first(g, "TX game start") or "no 'TX game start' from the guest")
+        self.check("posix_receives_game_start", first(p, "Game start received, expecting 2 players"),
+                   first(p, "Game start received") or "no 'Game start received' on the POSIX side")
+        self.check("both_leave_lobby", first(g, "LOBBY -> GAME") and first(p, "LOBBY -> GAME"),
+                   "guest: %s | POSIX: %s" % (first(g, "LOBBY -> GAME"), first(p, "LOBBY -> GAME")))
+        self.check("guest_in_game", gs, gs or "no 'Game started: 2 players, local=1' from the guest")
+        self.check("posix_in_game", ps, ps or "no 'Game started: 2 players, local=0' from the POSIX build")
+
+        # The POSIX build logs at DEBUG, so it records every position it receives; the 68k build
+        # logs at INFO only (isMacSE), so what the guest saw of the POSIX player is its bomb
+        # message (placed where the peer stood) and, below, its screenshots.
+        def px(lines, who):   # distinct pixel positions logged for player `who` from the network
+            return {m.group(1) for l in lines for m in [re.search(r"P%d target pos px=(\(\d+,\d+\))" % who, l)] if m}
+        pos_p = px(p, 1)
+        self.facts.update(posix_saw_guest_positions=sorted(pos_p))
+        self.check("posix_sees_guest_move", len(pos_p) >= 2,
+                   "POSIX received %d distinct positions of P1: %s" % (len(pos_p), ", ".join(sorted(pos_p)[:8])))
+        txg, txp = first(g, "TX bomb placed"), first(p, "TX bomb placed")
+        rxg, rxp = first(g, "RX bomb placed P0"), first(p, "RX bomb placed P1")
+        self.check("guest_bomb_reaches_posix", txg and rxp, "guest: %s | POSIX: %s" % (txg, rxp))
+        self.check("posix_bomb_reaches_guest", txp and rxg, "POSIX: %s | guest: %s" % (txp, rxg))
+        m = re.search(r"RX bomb placed P0 \((\d+),(\d+)\)", rxg or "")
+        self.check("guest_sees_posix_moved", m and (m.group(1), m.group(2)) != ("1", "1"),
+                   "the guest received P0's bomb at %s; P0 spawns at (1,1), so it had moved" % (m.group(0) if m else "nothing"))
+        self.check("both_alive_no_game_over", not first(g, "Game over") and not first(p, "Game over"),
+                   "no 'Game over' on either side (nobody walked into a blast)")
+        shots = [n for n in ("E2E_BT_LOBBY", "E2E_GAME_1", "E2E_GAME_2", "E2E_GAME_3", "E2E_GAME_4")
+                 if os.path.exists(os.path.join(self.shots, n + ".png"))]
+        self.check("guest_game_screenshots", len(shots) == 5, "saved: %s (E2E_GAME_*: the guest in the game with the POSIX player)" % ", ".join(shots))
+        import hashlib
+        def where(n, x0, x1):
+            return sprite_x(os.path.join(self.shots, n + ".png"), x0, x1) if n in shots else None
+        # the Plus board is 15 tiles of 16 px from x=136; the corners (1,1) and (13,1) are white floor
+        # with the free neighbours (2,1) and (12,1): the sprite is the only dark thing in the band
+        pa0, pa1 = where("E2E_GAME_1", 152, 184), where("E2E_GAME_4", 152, 184)
+        ga0, ga1 = where("E2E_GAME_1", 328, 360), where("E2E_GAME_4", 328, 360)
+        self.facts["sprite_x"] = {"posix_player": [pa0, pa1], "guest_player": [ga0, ga1]}
+        self.check("guest_screen_shows_posix_player_moved", None not in (pa0, pa1) and 12 <= pa1 - pa0 <= 20,
+                   "on the guest's screen the POSIX player's sprite is at x=%s at the start and x=%s at the end (one 16 px tile right)" % (pa0, pa1))
+        self.check("guest_screen_shows_guest_player_moved", None not in (ga0, ga1) and -20 <= ga1 - ga0 <= -12,
+                   "the guest's own sprite is at x=%s at the start and x=%s at the end (one tile left)" % (ga0, ga1))
+        digs = {n: hashlib.sha1(open(os.path.join(self.shots, n + ".png"), "rb").read()).hexdigest()[:8]
+                for n in shots}
+        self.facts["screenshot_sha1"] = digs
+        self.check("game_screen_changes", len({digs.get("E2E_BT_LOBBY"), digs.get("E2E_GAME_1")}) == 2
+                   and len({digs.get("E2E_GAME_1"), digs.get("E2E_GAME_4")}) == 2,
+                   "lobby, game start and the last game screenshot differ")
 
     # -- result ---------------------------------------------------------------------
     def finish(self):
@@ -474,6 +601,50 @@ class Run:
 
 
 # ---------------------------------------------------------------------------
+
+
+def png_gray(path):
+    """(width, height, rows) of a PNG as 8-bit red-channel rows (stdlib only; 8-bit RGBA/RGB, no interlace)."""
+    d = open(path, "rb").read()
+    o, idat = 8, b""
+    while o < len(d):
+        n, = struct.unpack(">I", d[o:o + 4])
+        kind = d[o + 4:o + 8]
+        if kind == b"IHDR":
+            w, h, depth, ctype = struct.unpack(">IIBB", d[o + 8:o + 18])
+            assert depth == 8 and ctype in (2, 6), "unsupported PNG"
+            bpp = 4 if ctype == 6 else 3
+        elif kind == b"IDAT":
+            idat += d[o + 8:o + 8 + n]
+        o += 12 + n
+    raw = zlib.decompress(idat)
+    st, prev, rows, i = w * bpp, bytearray(w * bpp), [], 0
+    for _ in range(h):
+        f, line, i = raw[i], bytearray(raw[i + 1:i + 1 + st]), i + 1 + st
+        for x in range(st):
+            a = line[x - bpp] if x >= bpp else 0
+            b = prev[x]
+            c = prev[x - bpp] if x >= bpp else 0
+            if f == 1:
+                line[x] = (line[x] + a) & 255
+            elif f == 2:
+                line[x] = (line[x] + b) & 255
+            elif f == 3:
+                line[x] = (line[x] + (a + b) // 2) & 255
+            elif f == 4:
+                pa, pb, pc = abs(b - c), abs(a - c), abs(a + b - 2 * c)
+                line[x] = (line[x] + (a if pa <= pb and pa <= pc else (b if pb <= pc else c))) & 255
+        rows.append(line)
+        prev = line
+    return w, h, [bytes(r[0::bpp]) for r in rows]
+
+
+def sprite_x(path, x0, x1, y0=103, y1=118):
+    """Leftmost dark pixel column in the top row of the Plus-sized board between x0 and x1
+    (the two spawn corners are white floor, so a player sprite is the only dark thing there)."""
+    w, h, rows = png_gray(path)
+    xs = [x for x in range(x0, x1) if any(rows[y][x] < 100 for y in range(y0, y1))]
+    return xs[0] if xs else None
 
 
 def read_pcap(path):

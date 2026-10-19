@@ -14,7 +14,7 @@
 #                  test/net/add-apps.sh with the PeerTalk 68k apps (test_mesh, test_chat)
 #   PEERTALK_DIR   PeerTalk checkout (read-only; POSIX peer is built from it)
 #   CLOG_DIR       clog sources (read-only; nothing is fetched)
-#   BOMBERTALK_DIR optional BomberTalk checkout (read-only), built as the POSIX peer of R4
+#   BOMBERTALK_DIR optional BomberTalk checkout (read-only), built as the POSIX peer of R4 and R5
 #   PEERTALK_DIR_OLD  optional second PeerTalk checkout (pre-fix), built as /opt/peers/old;
 #                  select it for a run with E2E_PEER=old
 # Options:

@@ -20,7 +20,7 @@
 #   E2E_TAP_MAC   tap0 MAC              (default 02:00:00:00:00:0a)
 #   E2E_TIMEOUT   hard time limit in seconds for the whole run (default 1500)
 set -eu
-[ $# -eq 1 ] || { echo "usage: e2e-entrypoint RUNG   (r1 r2 r3 r3b)" >&2; exit 2; }
+[ $# -eq 1 ] || { echo "usage: e2e-entrypoint RUNG   (r1 r2 r2b r3 r3b r4 r5)" >&2; exit 2; }
 IP="${E2E_TAP_IP:-$(python3 -I /opt/e2e/e2e.py --tap-ip "$1")}"
 MAC="${E2E_TAP_MAC:-02:00:00:00:00:0a}"
 
