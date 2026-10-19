@@ -17,9 +17,9 @@ struct Token
 		Operator,
 		End
 	};
-	Kind kind;
+	Kind kind = Kind::End;
 	std::string text;
-	uint64_t numValue; // valid when kind == Number
+	uint64_t numValue = 0; // valid when kind == Number
 	bool quoted = false; // written "in quotes" (kind is Word)
 
 	bool isWord() const { return kind == Kind::Word; }

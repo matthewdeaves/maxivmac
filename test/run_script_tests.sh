@@ -88,6 +88,7 @@ expect "default-timeout 100ms is 0.100 s"  units_timeout.dbg     1 "expired afte
 expect "wait ... 50ms is 0.050 s"          explicit_timeout.dbg  1 "expired after 0.050 s emulated"
 expect "unknown command exits 2"           bad_command.dbg       2 "FAIL"
 expect "bad timeout exits 2"               bad_wait_arg.dbg      2 "cannot parse timeout"
+expect "overflowing timeout exits 2"      huge_timeout.dbg      2 "cannot parse timeout"
 expect "mouse commands parse and run"      mouse_cmds.dbg        0 "script completed"
 
 expect "exit <code> sets the exit status"          exit_code.dbg         3 "Exiting with code 3"

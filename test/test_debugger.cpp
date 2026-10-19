@@ -406,6 +406,39 @@ TEST_CASE("ParseNumber handles 64-bit values")
 	CHECK(val == 4614455813800ULL);
 }
 
+TEST_CASE("ParseNumber rejects values that do not fit 64 bits")
+{
+	uint64_t val = 0;
+	CHECK(ParseNumber("$FFFFFFFFFFFFFFFF", val));
+	CHECK(val == UINT64_MAX);
+	CHECK_FALSE(ParseNumber("$10000000000000000", val));
+	CHECK_FALSE(ParseNumber("0x10000000000000000", val));
+	CHECK(ParseNumber("18446744073709551615", val));
+	CHECK(val == UINT64_MAX);
+	CHECK_FALSE(ParseNumber("18446744073709551616", val));
+	CHECK_FALSE(ParseNumber("99999999999999999999999", val));
+}
+
+TEST_CASE("tokenize: a failed ParseNumber is a Word, not a Number with garbage")
+{
+	auto t = Tokenize("$ 0x $10000000000000000 99999999999999999999999 $10");
+	REQUIRE(t.size() >= 5);
+	CHECK(t[0].kind == Token::Kind::Word);
+	CHECK(t[1].kind == Token::Kind::Word);
+	CHECK(t[2].kind == Token::Kind::Word);
+	CHECK(t[3].kind == Token::Kind::Word);
+	CHECK(t[4].kind == Token::Kind::Number);
+	CHECK(t[4].numValue == 0x10);
+}
+
+TEST_CASE("ParseFmtSpec saturates an absurd count instead of overflowing int")
+{
+	auto f = ParseFmtSpec("99999999999999999999x");
+	CHECK(f.count > 0);
+	CHECK(f.count <= (1 << 20));
+	CHECK(f.format == 'x');
+}
+
 /* ════════════════════════════════════════════════════════
    Dispatch tests
    ════════════════════════════════════════════════════════ */
@@ -744,6 +777,33 @@ TEST_CASE("duration parse raw number")
 	uint64_t c;
 	CHECK(ParseDuration("40000000", 8'000'000, c));
 	CHECK(c == 40'000'000);
+}
+
+TEST_CASE("duration parse rejects overflow instead of wrapping")
+{
+	uint64_t c = 123;
+	CHECK_FALSE(ParseDuration("99999999999999999999", 8'000'000, c));	  /* strtoull saturates */
+	CHECK_FALSE(ParseDuration("9999999999999999999s", 8'000'000, c));	  /* val * hz wraps */
+	CHECK_FALSE(ParseDuration("9999999999999999999ms", 8'000'000, c));
+	CHECK_FALSE(ParseDuration("99999999999999999M", 8'000'000, c));
+	CHECK_FALSE(ParseDuration("99999999999999999999k", 8'000'000, c));
+	CHECK(c == 123);
+	CHECK(ParseDuration("2s", UINT64_MAX / 2, c));
+	CHECK(c == UINT64_MAX - 1);
+}
+
+TEST_CASE("duration tokens: an overflowing value+unit is an error")
+{
+	auto t = Tokenize("9999999999999999 s");
+	uint64_t out = 0;
+	size_t used = 0;
+	CHECK_FALSE(ParseDurationTokens(t, 0, 500'000'000, out, used));
+}
+
+TEST_CASE("FormatDuration does not wrap on huge cycle counts")
+{
+	/* 2^63 cycles at 7 Hz: cycles*1000 wraps; must fall through to the raw/k/M forms */
+	CHECK(FormatDuration(1ULL << 63, 7) == "9223372036854775808");
 }
 
 TEST_CASE("duration parse off")

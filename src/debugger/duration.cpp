@@ -6,7 +6,16 @@
 #include "debugger/cmd_parser.h"
 
 #include <cctype>
+#include <cerrno>
 #include <cstdlib>
+
+/* a * b without wrap-around; false on overflow. */
+static bool MulFits(uint64_t a, uint64_t b, uint64_t &out)
+{
+	if (a != 0 && b > UINT64_MAX / a) return false;
+	out = a * b;
+	return true;
+}
 
 bool ParseDuration(std::string_view text, uint64_t clockHz,
 				   uint64_t &outCycles)
@@ -24,9 +33,11 @@ bool ParseDuration(std::string_view text, uint64_t clockHz,
 	const char *start = text.data();
 	const char *end = start + text.size();
 	char *numEnd = nullptr;
+	errno = 0;
 	unsigned long long val = std::strtoull(start, &numEnd, 10);
 
 	if (numEnd == start) return false; // no digits at all
+	if (errno == ERANGE) return false; // does not fit 64 bits (strtoull saturates)
 
 	std::string_view suffix(numEnd, static_cast<size_t>(end - numEnd));
 
@@ -37,31 +48,23 @@ bool ParseDuration(std::string_view text, uint64_t clockHz,
 		return true;
 	}
 
+	/* unit -> {multiplier, divisor}: cycles = val * mul / div, without wrapping */
+	uint64_t mul, div = 1;
 	if (suffix == "s")
-	{
-		outCycles = val * clockHz;
-		return true;
-	}
+		mul = clockHz;
+	else if (suffix == "ms")
+		mul = clockHz, div = 1000;
+	else if (suffix == "M")
+		mul = 1'000'000;
+	else if (suffix == "k" || suffix == "K")
+		mul = 1'000;
+	else
+		return false;
 
-	if (suffix == "ms")
-	{
-		outCycles = val * clockHz / 1000;
-		return true;
-	}
-
-	if (suffix == "M")
-	{
-		outCycles = val * 1'000'000;
-		return true;
-	}
-
-	if (suffix == "k" || suffix == "K")
-	{
-		outCycles = val * 1'000;
-		return true;
-	}
-
-	return false;
+	uint64_t prod;
+	if (!MulFits(val, mul, prod)) return false;
+	outCycles = prod / div;
+	return true;
 }
 
 std::string FormatDuration(uint64_t cycles, uint64_t clockHz)
@@ -76,7 +79,7 @@ std::string FormatDuration(uint64_t cycles, uint64_t clockHz)
 	}
 
 	// Try milliseconds
-	if (clockHz > 0 && (cycles * 1000) % clockHz == 0)
+	if (clockHz > 0 && cycles <= UINT64_MAX / 1000 && (cycles * 1000) % clockHz == 0)
 	{
 		uint64_t ms = (cycles * 1000) / clockHz;
 		return std::to_string(ms) + "ms";
@@ -118,11 +121,10 @@ bool ParseDurationTokens(const std::vector<Token> &toks, size_t idx,
 		const std::string &u = toks[idx + 1].text;
 		if (u == "s" || u == "ms" || u == "M" || u == "k" || u == "K" || u == "c")
 		{
-			if (ParseDuration(std::to_string(t.numValue) + u, unitsPerSecond, out))
-			{
-				used = 2;
-				return true;
-			}
+			/* a unit was given: an overflowing value is an error, not "number, then junk" */
+			if (!ParseDuration(std::to_string(t.numValue) + u, unitsPerSecond, out)) return false;
+			used = 2;
+			return true;
 		}
 	}
 	out = t.numValue;

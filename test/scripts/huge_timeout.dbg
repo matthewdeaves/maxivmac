@@ -1,0 +1,2 @@
+# A timeout that overflows 64 bits must be rejected, not wrap to a short wait.
+wait text "x" 9999999999999999s

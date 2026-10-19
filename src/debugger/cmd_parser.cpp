@@ -5,66 +5,53 @@
 #include "debugger/cmd_parser.h"
 #include "debugger/dbg_io.h"
 
+#include <algorithm>
 #include <cctype>
 #include <cstdio>
 #include <cstring>
+
+/* Parse a non-empty run of hex digits; false on a bad digit or more than 64 bits. */
+static bool ParseHexDigits(std::string_view hex, uint64_t &outVal)
+{
+	if (hex.empty()) return false;
+	uint64_t val = 0;
+	for (char c : hex)
+	{
+		uint64_t d;
+		if (c >= '0' && c <= '9')
+			d = c - '0';
+		else if (c >= 'a' && c <= 'f')
+			d = 10 + (c - 'a');
+		else if (c >= 'A' && c <= 'F')
+			d = 10 + (c - 'A');
+		else
+			return false;
+		if (val >> 60) return false; /* would overflow 64 bits */
+		val = (val << 4) | d;
+	}
+	outVal = val;
+	return true;
+}
 
 bool ParseNumber(std::string_view text, uint64_t &outVal)
 {
 	if (text.empty()) return false;
 
 	/* $hex */
-	if (text[0] == '$')
-	{
-		auto hex = text.substr(1);
-		if (hex.empty()) return false;
-		uint64_t val = 0;
-		for (char c : hex)
-		{
-			uint64_t d;
-			if (c >= '0' && c <= '9')
-				d = c - '0';
-			else if (c >= 'a' && c <= 'f')
-				d = 10 + (c - 'a');
-			else if (c >= 'A' && c <= 'F')
-				d = 10 + (c - 'A');
-			else
-				return false;
-			val = (val << 4) | d;
-		}
-		outVal = val;
-		return true;
-	}
+	if (text[0] == '$') return ParseHexDigits(text.substr(1), outVal);
 
 	/* 0xhex */
 	if (text.size() > 2 && text[0] == '0' && (text[1] == 'x' || text[1] == 'X'))
-	{
-		auto hex = text.substr(2);
-		if (hex.empty()) return false;
-		uint64_t val = 0;
-		for (char c : hex)
-		{
-			uint64_t d;
-			if (c >= '0' && c <= '9')
-				d = c - '0';
-			else if (c >= 'a' && c <= 'f')
-				d = 10 + (c - 'a');
-			else if (c >= 'A' && c <= 'F')
-				d = 10 + (c - 'A');
-			else
-				return false;
-			val = (val << 4) | d;
-		}
-		outVal = val;
-		return true;
-	}
+		return ParseHexDigits(text.substr(2), outVal);
 
 	/* decimal */
 	uint64_t val = 0;
 	for (char c : text)
 	{
 		if (c < '0' || c > '9') return false;
-		val = val * 10 + (c - '0');
+		const uint64_t d = static_cast<uint64_t>(c - '0');
+		if (val > (UINT64_MAX - d) / 10) return false; /* overflow */
+		val = val * 10 + d;
 	}
 	outVal = val;
 	return true;
@@ -158,7 +145,9 @@ std::vector<Token> Tokenize(std::string_view line)
 			Token t;
 			t.kind = Token::Kind::Number;
 			t.text = text;
-			ParseNumber(text, t.numValue);
+			/* "$", "0x" or an over-long literal is not a number: make it a Word so the
+			   command reports an error instead of using a garbage numValue. */
+			if (!ParseNumber(text, t.numValue)) t.kind = Token::Kind::Word;
 			tokens.push_back(std::move(t));
 			continue;
 		}
@@ -182,7 +171,9 @@ std::vector<Token> Tokenize(std::string_view line)
 			Token t;
 			t.kind = Token::Kind::Number;
 			t.text = text;
-			ParseNumber(text, t.numValue);
+			/* "$", "0x" or an over-long literal is not a number: make it a Word so the
+			   command reports an error instead of using a garbage numValue. */
+			if (!ParseNumber(text, t.numValue)) t.kind = Token::Kind::Word;
 			tokens.push_back(std::move(t));
 			continue;
 		}
@@ -284,7 +275,7 @@ FmtSpec ParseFmtSpec(const std::string &spec)
 		f.count = 0;
 		while (pos < len && spec[pos] >= '0' && spec[pos] <= '9')
 		{
-			f.count = f.count * 10 + (spec[pos] - '0');
+			f.count = std::min(f.count * 10 + (spec[pos] - '0'), 1 << 20); /* no signed overflow */
 			++pos;
 		}
 	}
