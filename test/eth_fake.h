@@ -2,6 +2,7 @@
 // adapter sends, queues frames the test injects, link state is settable.
 #pragma once
 
+#include <array>
 #include <vector>
 
 #include "devices/eth_backend.h"
@@ -38,11 +39,14 @@ private:
 	FrameQueue rx_;
 };
 
-// Build a test frame of `len` bytes: dst, src, ethertype 0x0800, payload = fill.
-inline std::vector<uint8_t> makeFrame(size_t len, uint8_t fill)
+// Build a test frame of `len` bytes: dst (default broadcast), src 02:..:99,
+// ethertype 0x0800, payload = fill.
+inline std::vector<uint8_t> makeFrame(size_t len, uint8_t fill,
+									  std::array<uint8_t, 6> dst = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF})
 {
 	std::vector<uint8_t> f(len, fill);
-	for (size_t i = 0; i < 12 && i < len; i++) f[i] = uint8_t(0xA0 + (i % 6));
+	for (size_t i = 0; i < 6 && i < len; i++) f[i] = dst[i];
+	for (size_t i = 6; i < 12 && i < len; i++) f[i] = i == 6 ? 0x02 : i == 11 ? 0x99 : 0x00;
 	if (len > 13) { f[12] = 0x08; f[13] = 0x00; }
 	return f;
 }
