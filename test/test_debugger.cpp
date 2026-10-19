@@ -14,9 +14,11 @@
 #include "lang/global_registry.h"
 
 #include <cstring>
+#ifndef _WIN32
 #include <sys/stat.h>
 #include <unistd.h>
 #include "debugger/dbg_io.h"
+#endif
 
 /* ════════════════════════════════════════════════════════
    Symbol table tests
@@ -938,18 +940,20 @@ TEST_CASE("hyphenated setting names are rejoined")
 
 TEST_CASE("data path candidates are ordered cwd, env, exe, source")
 {
+	/* compare with / separators so the checks hold on Windows too */
+	auto G = [](std::string x) { return std::filesystem::path(x).generic_string(); };
 	auto c = DataPathCandidates("data/debug/traps.def", "/env", "/a/bld/macos", "/src");
 	REQUIRE(c.size() == 6);
-	CHECK(c[0] == "data/debug/traps.def");
-	CHECK(c[1] == "/env/data/debug/traps.def");
-	CHECK(c[2] == "/a/data/debug/traps.def");
-	CHECK(c[3] == "/a/bld/data/debug/traps.def");
-	CHECK(c[4] == "/a/bld/macos/data/debug/traps.def");
-	CHECK(c[5] == "/src/data/debug/traps.def");
+	CHECK(G(c[0]) == "data/debug/traps.def");
+	CHECK(G(c[1]) == "/env/data/debug/traps.def");
+	CHECK(G(c[2]) == "/a/data/debug/traps.def");
+	CHECK(G(c[3]) == "/a/bld/data/debug/traps.def");
+	CHECK(G(c[4]) == "/a/bld/macos/data/debug/traps.def");
+	CHECK(G(c[5]) == "/src/data/debug/traps.def");
 
 	auto d = DataPathCandidates("x", "", "", "");
 	REQUIRE(d.size() == 1);
-	CHECK(d[0] == "x");
+	CHECK(G(d[0]) == "x");
 }
 
 TEST_CASE("data path resolves traps.def from an unrelated working directory")
@@ -966,6 +970,7 @@ TEST_CASE("data path resolves traps.def from an unrelated working directory")
 	CHECK(ResolveDataPath("data/debug/no-such-file.def") == "data/debug/no-such-file.def");
 }
 
+#ifndef _WIN32
 TEST_CASE("debug server socket is owner-only and the umask is restored")
 {
 	const std::string path = "/tmp/maxivmac-test-" + std::to_string(getpid()) + ".sock";
@@ -982,3 +987,4 @@ TEST_CASE("debug server socket is owner-only and the umask is restored")
 	close(fd);
 	unlink(path.c_str());
 }
+#endif

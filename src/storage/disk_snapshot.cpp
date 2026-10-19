@@ -5,7 +5,11 @@
 
 #include <cerrno>
 #include <cstring>
+#ifdef _WIN32
+#include <io.h> /* dup, close */
+#else
 #include <unistd.h>
+#endif
 
 DiskSnapshots::~DiskSnapshots()
 {

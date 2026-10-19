@@ -3,7 +3,15 @@
 #include "storage/startup_disks.h"
 #include "storage/disk_snapshot.h"
 
+#ifdef _WIN32
+#include <io.h> /* _access */
+#define access _access
+#ifndef W_OK
+#define W_OK 2
+#endif
+#else
 #include <unistd.h>
+#endif
 
 #include <cstdio>
 #include <cstring>
