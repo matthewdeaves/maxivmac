@@ -378,9 +378,12 @@ target_compile_options(ad2bin PRIVATE -Wall -Wextra -Werror)
 # ---------------------------------------------------------------------------
 add_custom_command(
     OUTPUT "${CMAKE_BINARY_DIR}/driver43_data.h"
-    COMMAND xxd -i driver43.bin > "${CMAKE_BINARY_DIR}/driver43_data.h"
-    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/tools/imgutil"
+    COMMAND ${CMAKE_COMMAND}
+        -DIN=${CMAKE_SOURCE_DIR}/tools/imgutil/driver43.bin
+        -DOUT=${CMAKE_BINARY_DIR}/driver43_data.h
+        -P ${CMAKE_SOURCE_DIR}/cmake/embed_driver.cmake
     DEPENDS "${CMAKE_SOURCE_DIR}/tools/imgutil/driver43.bin"
+            "${CMAKE_SOURCE_DIR}/cmake/embed_driver.cmake"
     COMMENT "Embedding driver43.bin"
 )
 add_executable(imgutil
