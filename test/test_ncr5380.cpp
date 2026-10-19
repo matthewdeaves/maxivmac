@@ -2,6 +2,7 @@
 #include <doctest/doctest.h>
 
 #include "devices/ncr5380.h"
+#include "devices/scsi_addr.h"
 
 namespace
 {
@@ -82,4 +83,22 @@ TEST_CASE("ncr5380 legacy: selecting any ID never raises BSY")
 	c.write(MR, 0x01, false);
 	c.write(ICR, 0x04 | 0x08, false);
 	for (int i = 0; i < 100; i++) CHECK((c.read(CSR, false) & 0x40) == 0);
+}
+
+TEST_CASE("scsi_addr: register comes from A4-A6")
+{
+	for (uint32_t r = 0; r < 8; r++)
+	{
+		CHECK(scsi_addr::decode(0x580000 | (r << 4), false) == r);
+		CHECK(scsi_addr::decode(0x580001 | (r << 4), false) == r);
+	}
+}
+
+TEST_CASE("scsi_addr: A9 is /DACK on compact Macs, ignored on II family")
+{
+	CHECK(scsi_addr::decode(0x580200, false) == scsi_addr::kDackBit);
+	CHECK(scsi_addr::decode(0x580260, false) == (scsi_addr::kDackBit | 6));
+	CHECK(scsi_addr::decode(0x580060, false) == 6);
+	CHECK(scsi_addr::decode(0x580200, true) == 0);
+	CHECK(scsi_addr::decode(0x580260, true) == 6);
 }
