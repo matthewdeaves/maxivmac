@@ -108,6 +108,34 @@ break off
 Fire when the machine powers off (Mac II and later).  On machines
 without power-off hardware, this breakpoint will never fire.
 
+## Time units
+
+Every duration in a script (`wait` timeouts, `wait for`, `timeout`,
+`set default-timeout`) is measured in **scheduler units** of emulated time,
+not wall-clock time.  One unit is 1/64 of a 68000 clock cycle
+(`kCycleScale` = 64), which is about 1/1000 of an instruction.  A Mac
+Plus/SE/Classic (7.8336 MHz) runs 501,350,400 units per emulated second;
+a Mac II (clockMult 2) runs twice that.  A cold boot of System 6.0.8 to the
+Finder on a Plus takes about 11.4e9 units (23 s emulated, ~2.5 s of wall
+time when headless).
+
+A bare number is a raw unit count.  Suffixes (written directly after the
+number, `20s` or `20 s`) make durations readable:
+
+| Suffix | Meaning |
+|---|---|
+| `s` | emulated seconds (converted with the running machine's clock) |
+| `ms` | emulated milliseconds |
+| `M`, `k` | x 1,000,000 / x 1,000 **raw units** (not cycles) |
+| `c` | raw units (explicit) |
+| `off`, `none` | no timeout (only valid where a timeout is expected) |
+
+Prefer `s`/`ms`; the `M`/`k` forms are small amounts of emulated time
+(1M = 2 ms on a Plus).
+
+The default timeout is 60 s emulated (`set default-timeout`).  Timeouts
+are checked once per 60 Hz tick, so the granularity is ~17 ms.
+
 ## The `wait` command
 
 ```
@@ -125,24 +153,26 @@ breakpoint target:
 | Form | What it waits for |
 |---|---|
 | `wait text "pattern"` | Text match |
-| `wait text "pattern" <cycles>` | Text match with explicit timeout |
+| `wait text "pattern" 20s` | Text match with explicit timeout |
 | `wait screen "ref.png"` | Screen match |
-| `wait screen "ref.png" <cycles> <pct>` | Screen match with budget + threshold |
+| `wait screen "ref.png" 20s 95` | Screen match with timeout + threshold (percent) |
+| `wait for 2s` | Run for a fixed amount of emulated time (never fails) |
 | `wait off` | Power-off |
 | `wait $40122E` | PC hits address |
 | `wait main` | PC hits symbol |
 | `wait trap GetResource` | Trap fires |
 
-**Timeout:** Each `wait` creates a paired instruction-count breakpoint
-as a deadline.  Whichever fires first (condition or timeout) wins and
-deletes the other.  The timeout defaults to the value set by the
-`timeout` command.
+**Timeout:** Each `wait` carries a deadline (in emulated time, see
+[Time units](#time-units)).  Whichever fires first (condition or timeout)
+wins.  The timeout defaults to the value set by `timeout` /
+`set default-timeout`; `wait ... off` waits forever.
 
 **On timeout failure:**
-- Save screenshot to `<script-dir>/fail-<line>.png`
-- Print error to stderr
-- In headless mode: exit non-zero
-- In interactive mode: drop to debugger prompt
+- Print `TIMEOUT: wait (bp N) expired after ...` to the debugger output
+- Save `timeout-screenshot.png` in the current working directory
+- In unattended script mode (`--dbg-script` without `--debugger`): exit
+  with status 1
+- With `--debugger` / interactive: drop to the debugger prompt
 
 **Interactive use:** If you type `wait` at the prompt with no pending
 script, it behaves like `tbreak <condition>` + `continue` — stops
@@ -153,18 +183,13 @@ when the condition fires and shows the prompt.
 ### timeout
 
 ```
-timeout <cycles>
+timeout <duration>
+set default-timeout <duration>
 ```
 
-Set the default cycle budget for `wait` commands that don't specify
-their own limit.
-
-Default: 40 000 000 cycles (~5s at 8 MHz).
-
-On an 8 MHz 68000, 8 000 000 cycles ≈ 1 second.
-
-Later: allow a suffix — `timeout 5s`, `timeout 500ms` — as syntactic
-sugar for cycle counts.
+Set the default timeout for `wait` commands that don't specify their own.
+Takes `5s`, `500ms`, `1M`, `off` or a raw unit count (see
+[Time units](#time-units)).  Default: 60 s emulated.
 
 ### type
 
@@ -351,7 +376,7 @@ trace insns off
 wait text "SharedDrive.c"
 break GetResource
 key cmd-K
-wait text "Build succeeded" 400000000
+wait text "Build succeeded" 50s
 delete 1
 ```
 
@@ -366,7 +391,7 @@ falls out for free.
 # Boot disk: thinkc-build.hfs (THINK C as startup app)
 # SharedDrive: shared/ (contains project + source)
 
-timeout 40000000                   # ~5s at 8MHz
+timeout 5s
 
 # Dismiss unexpected "Replace?" dialogs automatically
 break text "Replace existing"
@@ -386,7 +411,7 @@ wait text "SharedDrive.c"
 
 # Build
 key cmd-K
-wait text "Save code resource" 400000000   # long compile — ~50s budget
+wait text "Save code resource" 50s   # long compile
 key return
 
 # Back to editor = build complete

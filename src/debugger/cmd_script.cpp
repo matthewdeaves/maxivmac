@@ -10,6 +10,7 @@
 
 #include "core/machine.h"
 #include "core/ict_scheduler.h"
+#include "core/rig.h"
 #include "guest/guest_dialog.h"
 #include "platform/platform.h"
 #include "platform/keycodes.h"
@@ -19,107 +20,146 @@
 #include <cinttypes>
 #include <cstdlib>
 
+uint64_t ScriptUnitsPerSecond()
+{
+	/* A Mac Plus runs 130240 CPU cycles per 60.147 Hz tick = 7,833,600 Hz;
+	   faster models multiply that by clockMult. */
+	int mult = g_rig ? g_rig->config().clockMult : 1;
+	return 7'833'600ull * static_cast<uint64_t>(mult) * kCycleScale;
+}
+
 ScaledCycleCount ScriptDefaultTimeout()
 {
-	uint64_t v = 40'000'000;
+	uint64_t v = kDefaultScriptTimeoutUnits;
 	SettingGetUInt64("default-timeout", v);
 	return v;
+}
+
+/* Report a bad script command.  In unattended script mode (--dbg-script
+   without --debugger) a script that cannot run as written must not carry on
+   and report success, so exit with status 2. */
+static void ScriptError(Debugger &dbg, const char *usage)
+{
+	dbg.io().write("%s\n", usage);
+	if (dbg.scriptMode())
+	{
+		dbg.io().write("FAIL: bad script command\n");
+		std::exit(2);
+	}
+}
+
+static void WaitUsage(Debugger &dbg)
+{
+	dbg.io().write("Usage: wait text \"pattern\" [timeout]\n");
+	dbg.io().write("       wait screen \"ref.png\" [timeout] [pct]\n");
+	dbg.io().write("       wait for <duration>\n");
+	dbg.io().write("       wait off [timeout]\n");
+	dbg.io().write("       wait <addr|symbol> [timeout]\n");
+	dbg.io().write("       wait trap <name> [timeout]\n");
+	dbg.io().write("  duration/timeout: 5s, 500ms, 1M, 100k, off, or raw units\n");
+	if (dbg.scriptMode())
+	{
+		dbg.io().write("FAIL: bad script command\n");
+		std::exit(2);
+	}
 }
 
 void CmdWait(Debugger &dbg, const std::vector<Token> &args)
 {
 	if (args.empty() || args[0].isEnd())
 	{
-		dbg.io().write("Usage: wait text \"pattern\" [cycles]\n");
-		dbg.io().write("       wait screen \"ref.png\" [cycles] [pct]\n");
-		dbg.io().write("       wait for <cycles>\n");
-		dbg.io().write("       wait off [cycles]\n");
-		dbg.io().write("       wait <addr|symbol> [cycles]\n");
-		dbg.io().write("       wait trap <name> [cycles]\n");
+		WaitUsage(dbg);
 		return;
 	}
 
-	// Determine cycle budget (0 = no timeout)
-	// Supports human-readable durations: 5s, 500ms, 1M, 100k, off
-	auto parseBudget = [&](size_t argIdx) -> ScaledCycleCount
+	const uint64_t hz = ScriptUnitsPerSecond();
+
+	// Parse an optional timeout at args[idx]; advances idx past it.
+	// Absent -> the default-timeout setting; "off" -> 0 (no timeout).
+	// Returns false (after printing an error) when a token is present but
+	// is not a duration.
+	auto parseBudget = [&](size_t &idx, ScaledCycleCount &budget) -> bool
 	{
-		if (argIdx < args.size() && !args[argIdx].isEnd())
+		budget = ScriptDefaultTimeout();
+		if (idx >= args.size() || args[idx].isEnd()) return true;
+		uint64_t v;
+		size_t used;
+		if (!ParseDurationTokens(args, idx, hz, v, used))
 		{
-			uint64_t cycles;
-			if (ParseDuration(args[argIdx].text, 8'000'000, cycles))
-				return cycles;
-			// Fall through to raw number
-			if (args[argIdx].isNumber()) return args[argIdx].numValue;
+			ScriptError(dbg, "Error: cannot parse timeout (use 5s, 500ms, 1M, off or a number)");
+			return false;
 		}
-		return ScriptDefaultTimeout();
+		idx += used;
+		budget = v;
+		return true;
 	};
 
-	auto computeDeadline = [&](ScaledCycleCount budget) -> ScaledCycleCount
+	auto setDeadline = [&](Debugger::Breakpoint &b, ScaledCycleCount budget)
 	{
-		if (budget == 0) return 0; // infinite
-		return g_ict.getCurrent() + budget;
+		b.timeoutBudget = budget;
+		b.timeoutAt = budget == 0 ? 0 : g_ict.getCurrent() + budget;
 	};
 
 	Debugger::Breakpoint bp;
 	bp.enabled = true;
 	bp.temporary = true;
 	bp.scriptOwned = true;
+	ScaledCycleCount budget = 0;
+	size_t idx = 0;
 
 	if (args[0].isWord("text"))
 	{
 		if (args.size() < 2 || args[1].isEnd())
 		{
-			dbg.io().write("Usage: wait text \"pattern\" [cycles]\n");
+			WaitUsage(dbg);
 			return;
 		}
 		bp.kind = Debugger::Breakpoint::Kind::Text;
 		bp.textPattern = args[1].text;
-		bp.timeoutAt = computeDeadline(parseBudget(2));
+		idx = 2;
+		if (!parseBudget(idx, budget)) return;
+		setDeadline(bp, budget);
 	}
 	else if (args[0].isWord("screen"))
 	{
 		if (args.size() < 2 || args[1].isEnd())
 		{
-			dbg.io().write("Usage: wait screen \"ref.png\" [cycles] [pct]\n");
+			WaitUsage(dbg);
 			return;
 		}
 		bp.kind = Debugger::Breakpoint::Kind::Screen;
 		if (!bp.screenMatcher.loadReference(args[1].text))
 		{
-			dbg.io().write("Error: cannot load reference PNG '%s'\n", args[1].text.c_str());
+			ScriptError(dbg, ("Error: cannot load reference PNG '" + args[1].text + "'").c_str());
 			return;
 		}
-		bp.timeoutAt = computeDeadline(parseBudget(2));
+		idx = 2;
+		if (!parseBudget(idx, budget)) return;
+		setDeadline(bp, budget);
 		// Optional threshold
-		if (args.size() >= 4 && args[3].isNumber())
-			bp.screenMatcher.threshold = static_cast<float>(args[3].numValue);
+		if (idx < args.size() && args[idx].isNumber())
+			bp.screenMatcher.threshold = static_cast<float>(args[idx].numValue);
 	}
 	else if (args[0].isWord("off"))
 	{
 		bp.kind = Debugger::Breakpoint::Kind::PowerOff;
-		bp.timeoutAt = computeDeadline(parseBudget(1));
+		idx = 1;
+		if (!parseBudget(idx, budget)) return;
+		setDeadline(bp, budget);
 	}
 	else if (args[0].isWord("for"))
 	{
-		if (args.size() < 2 || args[1].isEnd())
+		uint64_t dur;
+		size_t used;
+		if (!ParseDurationTokens(args, 1, hz, dur, used))
 		{
-			dbg.io().write("Usage: wait for <duration>\n");
+			WaitUsage(dbg);
 			return;
 		}
-		uint64_t budget;
-		if (!ParseDuration(args[1].text, 8'000'000, budget))
-		{
-			if (args[1].isNumber())
-				budget = args[1].numValue;
-			else
-			{
-				dbg.io().write("Cannot parse duration '%s'\n", args[1].text.c_str());
-				return;
-			}
-		}
-		ScaledCycleCount target = g_ict.getCurrent() + budget;
+		ScaledCycleCount target = g_ict.getCurrent() + dur;
 		uint32_t id = dbg.setCycleBreak(target, true);
-		dbg.io().write("Waiting %'" PRIu64 " cycles (bp %u)...\n", budget, id);
+		dbg.io().write("Waiting %'" PRIu64 " units = %.3f s emulated (bp %u)...\n", dur,
+					   static_cast<double>(dur) / static_cast<double>(hz), id);
 		dbg.setRunning();
 		return;
 	}
@@ -127,7 +167,7 @@ void CmdWait(Debugger &dbg, const std::vector<Token> &args)
 	{
 		if (args.size() < 2 || args[1].isEnd())
 		{
-			dbg.io().write("Usage: wait trap <name> [cycles]\n");
+			WaitUsage(dbg);
 			return;
 		}
 		uint32_t addr = 0;
@@ -135,13 +175,15 @@ void CmdWait(Debugger &dbg, const std::vector<Token> &args)
 		uint16_t subtrapSel = 0;
 		if (!SymbolsResolve(args[1].text, addr, trapWord, subtrapSel))
 		{
-			dbg.io().write("Cannot resolve '%s'\n", args[1].text.c_str());
+			ScriptError(dbg, ("Cannot resolve '" + args[1].text + "'").c_str());
 			return;
 		}
 		bp.kind = Debugger::Breakpoint::Kind::Trap;
 		bp.trapWord = trapWord;
 		bp.subtrapSelector = subtrapSel;
-		bp.timeoutAt = computeDeadline(parseBudget(2));
+		idx = 2;
+		if (!parseBudget(idx, budget)) return;
+		setDeadline(bp, budget);
 	}
 	else
 	{
@@ -157,7 +199,7 @@ void CmdWait(Debugger &dbg, const std::vector<Token> &args)
 		{
 			if (!SymbolsResolve(args[0].text, addr, trapWord, subtrapSel))
 			{
-				dbg.io().write("Cannot resolve '%s'\n", args[0].text.c_str());
+				ScriptError(dbg, ("Cannot resolve '" + args[0].text + "'").c_str());
 				return;
 			}
 		}
@@ -172,17 +214,33 @@ void CmdWait(Debugger &dbg, const std::vector<Token> &args)
 			bp.kind = Debugger::Breakpoint::Kind::Address;
 			bp.address = addr;
 		}
-		bp.timeoutAt = computeDeadline(parseBudget(1));
+		idx = 1;
+		if (!parseBudget(idx, budget)) return;
+		setDeadline(bp, budget);
 	}
 
 	uint32_t id = dbg.addBreakpoint(std::move(bp));
-	auto deadline = dbg.breakpoints().back().timeoutAt;
-	if (deadline == 0)
+	if (budget == 0)
 		dbg.io().write("Waiting (bp %u, no timeout)...\n", id);
 	else
-		dbg.io().write("Waiting (bp %u, timeout %" PRIu64 " cycles)...\n", id,
-					   deadline - g_ict.getCurrent());
+		dbg.io().write("Waiting (bp %u, timeout %.3f s emulated = %" PRIu64 " units)...\n", id,
+					   static_cast<double>(budget) / static_cast<double>(hz), budget);
 	dbg.setRunning();
+}
+
+void CmdTimeout(Debugger &dbg, const std::vector<Token> &args)
+{
+	uint64_t units;
+	size_t used;
+	if (!ParseDurationTokens(args, 0, ScriptUnitsPerSecond(), units, used))
+	{
+		ScriptError(dbg, "Usage: timeout <duration>   (5s, 500ms, 1M, off, or raw units)");
+		return;
+	}
+	SettingSetUInt64("default-timeout", units);
+	std::string val;
+	SettingFormat("default-timeout", val);
+	dbg.io().write("default-timeout = %s units\n", val.c_str());
 }
 
 void CmdFail(Debugger &dbg, const std::vector<Token> &args)
@@ -215,8 +273,11 @@ void CheckScriptTimeouts()
 		if (now < bp.timeoutAt) continue;
 
 		// Timeout fired!
-		dbg->io().write("TIMEOUT: wait (bp %u) expired after %" PRIu64 " cycles\n", bp.id,
-						bp.timeoutAt);
+		dbg->io().write("TIMEOUT: wait (bp %u) expired after %.3f s emulated (%" PRIu64 " units)\n",
+						bp.id,
+						static_cast<double>(bp.timeoutBudget) /
+							static_cast<double>(ScriptUnitsPerSecond()),
+						bp.timeoutBudget);
 
 		SaveScreenshot("timeout-screenshot.png");
 

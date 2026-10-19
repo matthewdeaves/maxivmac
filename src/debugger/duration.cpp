@@ -3,6 +3,7 @@
 */
 
 #include "debugger/duration.h"
+#include "debugger/cmd_parser.h"
 
 #include <cctype>
 #include <cstdlib>
@@ -95,4 +96,36 @@ std::string FormatDuration(uint64_t cycles, uint64_t clockHz)
 
 	// Raw cycle count
 	return std::to_string(cycles);
+}
+
+bool ParseDurationTokens(const std::vector<Token> &toks, size_t idx,
+						 uint64_t unitsPerSecond, uint64_t &out, size_t &used)
+{
+	used = 0;
+	if (idx >= toks.size() || toks[idx].isEnd()) return false;
+	const Token &t = toks[idx];
+
+	if (t.isWord("off") || t.isWord("none"))
+	{
+		out = 0;
+		used = 1;
+		return true;
+	}
+	if (!t.isNumber()) return false;
+
+	if (idx + 1 < toks.size() && toks[idx + 1].isWord())
+	{
+		const std::string &u = toks[idx + 1].text;
+		if (u == "s" || u == "ms" || u == "M" || u == "k" || u == "K" || u == "c")
+		{
+			if (ParseDuration(std::to_string(t.numValue) + u, unitsPerSecond, out))
+			{
+				used = 2;
+				return true;
+			}
+		}
+	}
+	out = t.numValue;
+	used = 1;
+	return true;
 }

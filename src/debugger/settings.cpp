@@ -12,7 +12,7 @@
 /* ── Setting definitions ────────────────────────────── */
 
 static const std::vector<SettingDef> s_defs = {
-	{"default-timeout", SettingType::UInt64, "Default cycle budget for 'wait' commands (0 = infinite)"},
+	{"default-timeout", SettingType::UInt64, "Default timeout for 'wait' commands: 5s, 500ms, raw scheduler units, or off (= infinite)"},
 	{"confirm", SettingType::Bool, "Require y/n confirmation for destructive commands"},
 };
 
@@ -24,7 +24,9 @@ static std::unordered_map<std::string, SettingValue> s_values;
 
 void SettingsInit()
 {
-	s_values["default-timeout"] = uint64_t{40'000'000};
+	/* 60 s of emulated time on a 1x-clock machine (Plus/SE/Classic):
+	   7,833,600 Hz * 64 units per cycle * 60. */
+	s_values["default-timeout"] = uint64_t{kDefaultScriptTimeoutUnits};
 	s_values["confirm"] = false;
 }
 

@@ -25,6 +25,10 @@ struct SettingDef
 	std::string_view help;
 };
 
+// Default for "default-timeout": 60 s of emulated time on a 1x-clock machine
+// (7,833,600 Hz * 64 scheduler units per cycle * 60).
+inline constexpr uint64_t kDefaultScriptTimeoutUnits = 7'833'600ull * 64 * 60;
+
 // Initialize settings with default values.
 void SettingsInit();
 

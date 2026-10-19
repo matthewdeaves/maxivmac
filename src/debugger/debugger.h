@@ -97,6 +97,7 @@ public:
 
 		// Timeout: cycle-count deadline (0 = no timeout)
 		ScaledCycleCount timeoutAt = 0;
+		ScaledCycleCount timeoutBudget = 0; // budget the deadline was computed from
 	};
 
 	struct Watchpoint

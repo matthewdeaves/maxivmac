@@ -9,6 +9,7 @@
 #include "debugger/expr.h"
 #include "debugger/settings.h"
 #include "debugger/duration.h"
+#include "debugger/cmd_script.h"
 
 #include "core/machine.h"
 #include "cpu/m68k.h"
@@ -300,13 +301,15 @@ void CmdSet(Debugger &dbg, const std::vector<Token> &args)
 
 	if (!hasEquals && args[0].isWord() && !args[0].isOperator("*"))
 	{
-		auto &name = args[0].text;
+		/* Setting names contain hyphens, which the tokenizer splits. */
+		size_t nameToks = 0;
+		const std::string name = JoinHyphenatedName(args, nameToks);
 		auto &defs = SettingsList();
 		for (auto &d : defs)
 		{
 			if (d.name != name) continue;
 			/* Found a matching setting */
-			if (args.size() < 2 || args[1].isEnd())
+			if (args.size() <= nameToks || args[nameToks].isEnd())
 			{
 				std::string val;
 				SettingFormat(name, val);
@@ -320,11 +323,12 @@ void CmdSet(Debugger &dbg, const std::vector<Token> &args)
 			case SettingType::Bool:
 			{
 				bool v;
-				if (args[1].isWord("on") || args[1].isWord("true") || args[1].isWord("yes") ||
-					(args[1].isNumber() && args[1].numValue != 0))
+				const Token &a1 = args[nameToks];
+				if (a1.isWord("on") || a1.isWord("true") || a1.isWord("yes") ||
+					(a1.isNumber() && a1.numValue != 0))
 					v = true;
-				else if (args[1].isWord("off") || args[1].isWord("false") || args[1].isWord("no") ||
-						 (args[1].isNumber() && args[1].numValue == 0))
+				else if (a1.isWord("off") || a1.isWord("false") || a1.isWord("no") ||
+						 (a1.isNumber() && a1.numValue == 0))
 					v = false;
 				else
 				{
@@ -340,22 +344,17 @@ void CmdSet(Debugger &dbg, const std::vector<Token> &args)
 			}
 			case SettingType::UInt64:
 			{
-				// Try duration parser first (handles 5s, 500ms, 5M, 100k, off, etc.)
-				uint64_t cycles;
-				if (ParseDuration(args[1].text, 8'000'000, cycles))
-				{
-					SettingSetUInt64(name, cycles);
-				}
-				else if (args[1].isNumber())
-				{
-					SettingSetUInt64(name, args[1].numValue);
-				}
-				else
+				// Durations: 5s, 500ms, 5M, 100k, off, or a raw number
+				// (scheduler units; see ScriptUnitsPerSecond()).
+				uint64_t units;
+				size_t used;
+				if (!ParseDurationTokens(args, nameToks, ScriptUnitsPerSecond(), units, used))
 				{
 					dbg.io().write("Expected number or duration for '%.*s'\n",
 								   static_cast<int>(d.name.size()), d.name.data());
 					return;
 				}
+				SettingSetUInt64(name, units);
 				std::string val;
 				SettingFormat(name, val);
 				dbg.io().write("%.*s = %s\n",
@@ -365,7 +364,9 @@ void CmdSet(Debugger &dbg, const std::vector<Token> &args)
 			}
 			case SettingType::String:
 			{
-				std::string val = (args.size() >= 2 && !args[1].isEnd()) ? args[1].text : "";
+				std::string val = (args.size() > nameToks && !args[nameToks].isEnd())
+									  ? args[nameToks].text
+									  : "";
 				// SettingSetString not implemented yet
 				dbg.io().write("String settings not yet supported\n");
 				return;
@@ -646,7 +647,8 @@ void CmdShow(Debugger &dbg, const std::vector<Token> &args)
 	if (!args.empty() && args[0].isWord() && !args[0].isEnd())
 	{
 		/* Show a specific setting */
-		auto &name = args[0].text;
+		size_t nameToks = 0;
+		const std::string name = JoinHyphenatedName(args, nameToks);
 		std::string val;
 		if (SettingFormat(name, val))
 		{
