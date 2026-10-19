@@ -102,6 +102,7 @@ set(MINIVMAC_SOURCES
     src/debugger/bp_screen.cpp
     src/debugger/cmd_script.cpp
     src/debugger/script_mouse.cpp
+    src/debugger/script_paths.cpp
     src/debugger/script_keymap.cpp
     src/debugger/settings.cpp
     src/debugger/duration.cpp
@@ -392,7 +393,9 @@ add_executable(tests
     src/debugger/settings.cpp
     src/debugger/duration.cpp
     src/debugger/script_mouse.cpp
+    src/debugger/script_paths.cpp
     test/test_script_mouse.cpp
+    test/test_script_paths.cpp
     src/storage/appledouble.cpp
     src/storage/filename_encoding.cpp
     src/storage/text_convert.cpp

@@ -33,9 +33,27 @@ maxivmac -disk boot.hfs --headless --dbg-script=build.dbg          # headless, m
 maxivmac -disk boot.hfs --debugger --dbg-script=build.dbg          # visible window, drops to prompt on finish
 ```
 
-`--headless` implies max speed and no display window.  If any command
-fails (timeout, explicit `fail`), the emulator exits non-zero, prints
-the error to stderr, and saves a screenshot.
+`--headless` runs without a window at maximum speed (a cold System 6 boot
+to the Finder takes ~2.5 s of wall time).  Without `--debugger`, the
+script is run in *unattended script mode*, where the exit status tells
+you what happened:
+
+| Status | Meaning |
+|---|---|
+| 0 | script ran to the end (`[script completed]`) or executed `exit 0` |
+| 1 | a `wait` timed out, `fail` ran, `exit 1`, or a screenshot could not be saved |
+| 2 | the script itself is wrong: unreadable script file, unknown or ambiguous command, unparsable argument (e.g. a bad timeout, unresolvable key, unknown trap), a `commands` block |
+
+The failing line is printed and, for timeouts and `fail`, a screenshot
+is saved (see [screenshot](#screenshot)).
+
+The run is deterministic: with the same ROM, disk image, and script, two
+runs produce byte-identical screenshots and CPU traces (verified by
+`test/run_script_tests.sh`).  Input timing is in emulated time, so
+wall-clock speed does not matter.  A fixed `wait for` is still a guess
+about how busy the guest is (the Finder is sometimes slow for a few
+seconds after boot); synchronise on something the guest draws instead,
+e.g. `mousedown 52 9` then `wait text "Eject"`.
 
 Since it's just a `.dbg` file, you can also `source build.dbg` from
 the interactive debugger prompt.
@@ -330,9 +348,19 @@ instead of replacing the current one, but this needs testing.
 screenshot "label"
 ```
 
-Save the current framebuffer to `<script-dir>/label.png`.
+Save the current framebuffer as `label.png` (the `.png` is added if the
+name has no extension).  A relative name is written under
+`$MAXIVMAC_OUT_DIR` when that environment variable is set (the directory
+is created), otherwise relative to the **current working directory** of
+the emulator process, not the script's directory.  An unwritable path
+exits with status 1 in unattended mode.
 
-Also saved automatically on timeout/failure (`<script-dir>/fail-<line>.png`).
+On `fail` and on a `wait` timeout, `fail-screenshot.png` /
+`timeout-screenshot.png` are saved the same way.
+
+The framebuffer is updated once per 60 Hz tick, so a screenshot taken
+in the same instant a `wait text` fires may not show that text yet; put
+`wait for 100ms` first.
 
 ### exittoshell
 
@@ -394,7 +422,14 @@ inspect, you continue, and the script picks up where it left off.
 ## Composability with existing commands
 
 Because `break text` and `break screen` are regular breakpoints, all
-existing features work:
+existing features work.
+
+> **Not yet working in script files:** the `commands ... end` blocks in
+> the examples below read their command list from the interactive
+> console, not from the `.dbg` file.  In unattended script mode a
+> `commands` line is rejected with exit status 2 rather than silently
+> running the following lines immediately.  Use them from the interactive
+> prompt (`--debugger`) for now.
 
 ```
 # Persistent text breakpoint with auto-commands (≈ "ontext")

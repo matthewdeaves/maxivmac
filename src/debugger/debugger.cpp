@@ -196,7 +196,7 @@ static CmdEntry s_commands[] = {
 	{"exit", "", CmdExit, "Exit with optional code",
 	 "exit [code]\n  Exit the emulator with the given exit code (default 0).\n",
 	 "Scripting"},
-	{"drive", "", CmdDrive, "Mount/unmount shared drives",
+	{"drive", "dr", CmdDrive, "Mount/unmount shared drives",
 	 "drive mount <path>\n  Mount a host directory as a new shared drive.\n"
 	 "drive unmount <slot>\n  Unmount and release shared drive by slot number.\n"
 	 "drive list\n  Show all mounted shared drives.\n",
@@ -806,6 +806,13 @@ void Debugger::executeCommands(const std::vector<std::string> &cmds)
 				(void)wasBreak;
 				return;
 			}
+		}
+		else if (impl_->scriptMode)
+		{
+			/* Unknown/ambiguous command (already reported by DispatchCommand):
+			   an unattended script must not carry on and exit 0. */
+			impl_->io->write("FAIL: cannot run script line: %s\n", line.c_str());
+			std::exit(2);
 		}
 	}
 	// All lines executed — clear any pending state
