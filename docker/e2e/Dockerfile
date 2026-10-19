@@ -13,6 +13,7 @@
 #   ctx/peertalk/      PeerTalk checkout       (PEERTALK_DIR, read-only input)
 #   ctx/peertalk-old/  optional second PeerTalk (PEERTALK_DIR_OLD), for the
 #                      pre-fix comparison; empty directory when not given
+#   ctx/bombertalk/    optional BomberTalk checkout (BOMBERTALK_DIR), for R4; empty = no R4 peer
 #   ctx/clog/          clog sources            (CLOG_DIR; nothing is fetched)
 #
 # libslirp is deliberately NOT installed: the emulator auto-detects it, and this
@@ -62,6 +63,22 @@ RUN set -eu; mkdir -p /peers; \
         strip "/peers/$tag"/*; \
     done
 
+# ---- stage 2b: BomberTalk, POSIX/SDL2 build (rung R4; empty context dir = skipped) ----
+FROM ${BASE} AS bt-build
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential pkg-config libsdl2-dev ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+COPY clog/ /src/clog/
+COPY peertalk/ /src/peertalk/
+COPY bombertalk/ /src/bombertalk/
+COPY e2e/test/e2e/in-container/sdlkeys.c /src/sdlkeys.c
+RUN mkdir -p /opt/bombertalk \
+    && if [ -f /src/bombertalk/tools/build-sdl.sh ]; then \
+        cd /src/bombertalk && PEERTALK_DIR=/src/peertalk CLOG_DIR=/src/clog OUT=/bt-out tools/build-sdl.sh \
+        && cp /bt-out/BomberTalk /opt/bombertalk/ && strip /opt/bombertalk/BomberTalk; \
+    fi \
+    && gcc -shared -fPIC -O2 -Wall -Wextra -Werror -o /opt/bombertalk/sdlkeys.so /src/sdlkeys.c
+
 # ---- stage 3: runtime --------------------------------------------------------
 FROM ${BASE}
 # iproute2: tap0 set-up (entrypoint, the only privileged step); iputils-ping:
@@ -69,13 +86,14 @@ FROM ${BASE}
 # only); runtime libraries of the headless emulator (SDL3 is linked even for
 # --headless; the video driver is "dummy").  util-linux (setpriv) is in the base.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        iproute2 iputils-ping python3 libsdl3-0 libgl1 libx11-6 \
+        iproute2 iputils-ping python3 libsdl3-0 libsdl2-2.0-0 libgl1 libx11-6 \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd -g 2010 e2e && useradd -u 2010 -g 2010 -M -d /nonexistent -s /usr/sbin/nologin e2e
 COPY --from=emu-build /bld/maxivmac /bld/ethhub /usr/local/bin/
 # trap names for the script's `wait text` (project data, not third-party)
 COPY --from=emu-build /src/data/debug/ /opt/maxivmac/data/debug/
 COPY --from=peer-build /peers /opt/peers
+COPY --from=bt-build /opt/bombertalk /opt/bombertalk
 COPY e2e/docker/e2e/entrypoint.sh /usr/local/bin/e2e-entrypoint
 COPY e2e/test/e2e/in-container/ /opt/e2e/
 COPY e2e/test/net/scripts/ /opt/e2e/net-scripts/

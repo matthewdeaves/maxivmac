@@ -14,6 +14,7 @@
 #                  test/net/add-apps.sh with the PeerTalk 68k apps (test_mesh, test_chat)
 #   PEERTALK_DIR   PeerTalk checkout (read-only; POSIX peer is built from it)
 #   CLOG_DIR       clog sources (read-only; nothing is fetched)
+#   BOMBERTALK_DIR optional BomberTalk checkout (read-only), built as the POSIX peer of R4
 #   PEERTALK_DIR_OLD  optional second PeerTalk checkout (pre-fix), built as /opt/peers/old;
 #                  select it for a run with E2E_PEER=old
 # Options:
@@ -60,13 +61,15 @@ trap 'rm -rf "$TMPROOT"; [ -n "${STATS_PID:-}" ] && kill "$STATS_PID" 2>/dev/nul
 
 # ---- the image: build context is a staged, filtered copy -----------------------
 if [ $NEEDS_IMAGE = 1 ]; then
-    CTX="$TMPROOT/ctx"; mkdir -p "$CTX/repo" "$CTX/e2e" "$CTX/peertalk" "$CTX/peertalk-old" "$CTX/clog"
+    CTX="$TMPROOT/ctx"; mkdir -p "$CTX/repo" "$CTX/e2e" "$CTX/peertalk" "$CTX/peertalk-old" "$CTX/bombertalk" "$CTX/clog"
     rsync -a --exclude .git --exclude bld --exclude docs --exclude media --exclude macdocs \
           --exclude macsrc --exclude foo --exclude extras --exclude '*.hfs' --exclude e2e-out \
           --exclude /docker --exclude /test/net --exclude /test/e2e "$REPO/" "$CTX/repo/"
     rsync -a --relative "$REPO/./docker/e2e" "$REPO/./test/e2e" "$REPO/./test/net" "$CTX/e2e/"
     rsync -a --exclude .git --exclude build "$PEERTALK_DIR/" "$CTX/peertalk/"
     [ -n "${PEERTALK_DIR_OLD:-}" ] && rsync -a --exclude .git --exclude build "$PEERTALK_DIR_OLD/" "$CTX/peertalk-old/"
+    [ -n "${BOMBERTALK_DIR:-}" ] && rsync -a --exclude .git --exclude books --exclude docs --exclude notes \
+          --exclude specs --exclude '/build*' "$BOMBERTALK_DIR/" "$CTX/bombertalk/"
     rsync -a --exclude .git "$CLOG_DIR/" "$CTX/clog/"
     cp "$REPO/docker/e2e/.dockerignore" "$CTX/.dockerignore"
     HASH="$(cd "$CTX" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 shasum | shasum | cut -c1-8)"
