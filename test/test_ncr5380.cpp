@@ -440,3 +440,109 @@ TEST_CASE("ncr5380 arbitration: RST clears AIP")
 	r.c.write(ICR, 0x80, false);
 	CHECK((r.c.read(ICR, false) & 0x40) == 0);
 }
+
+TEST_CASE("ncr5380 irq: phase mismatch at end of DMA data-in ends DMA and raises IRQ")
+{
+	std::vector<bool> irqs, drqs;
+	ScriptedTarget t;
+	Ncr5380::Lines l;
+	l.irq = [&](bool v) { irqs.push_back(v); };
+	l.drq = [&](bool v) { drqs.push_back(v); };
+	Ncr5380 c(l);
+	Host h{c};
+	c.attach(4, &t);
+	t.plans.push_back(ScriptedTarget::dataIn({1, 2, 3}));
+	REQUIRE(h.select(4, false));
+	h.sendCdb({0x08, 0, 0, 0, 0, 0});
+	c.write(TCR, P_DATAIN, false);
+	c.write(MR, 0x02, false);
+	CHECK(drqs.empty());
+	c.write(IDMARX, 0, false);
+	REQUIRE(drqs.size() == 1);
+	CHECK(drqs.back());
+	CHECK((c.read(BSR, false) & 0x10) == 0);
+	CHECK(irqs.empty());
+	CHECK(c.read(CDR, true) == 1);
+	CHECK(c.read(CDR, true) == 2);
+	CHECK(irqs.empty());
+	CHECK(c.read(CDR, true) == 3);
+	// target moved to STATUS: phase mismatch
+	CHECK(irqs == std::vector<bool>{true});
+	CHECK(drqs == std::vector<bool>{true, false});
+	const uint8_t bsr = c.read(BSR, false);
+	CHECK((bsr & 0x80) != 0); // end of DMA
+	CHECK((bsr & 0x10) != 0); // IRQ
+	CHECK((bsr & 0x40) == 0); // DRQ
+	CHECK((bsr & 0x08) == 0); // phase mismatch
+	// further DMA reads no longer transfer
+	CHECK(c.read(CDR, true) == 0x00); // status byte, not acknowledged
+	CHECK(h.phase() == P_STATUS);
+	// reading the reset register clears the interrupt
+	c.read(RESETR, false);
+	CHECK((c.read(BSR, false) & 0x10) == 0);
+	CHECK(irqs == std::vector<bool>{true, false});
+	c.write(MR, 0, false);
+	c.write(TCR, P_STATUS, false);
+	h.finish();
+}
+
+TEST_CASE("ncr5380 irq: phase mismatch after DMA data-out")
+{
+	Rig r;
+	r.t.plans.push_back(ScriptedTarget::dataOut(2));
+	r.connect();
+	r.h.sendCdb({0x0A, 0, 0, 0, 2, 0});
+	r.c.write(TCR, P_DATAOUT, false);
+	r.c.write(MR, 0x02, false);
+	r.c.write(DMATX, 0, false);
+	r.c.write(ODR, 7, true);
+	CHECK((r.c.read(BSR, false) & 0x10) == 0);
+	r.c.write(ODR, 8, true);
+	CHECK((r.c.read(BSR, false) & 0x90) == 0x90);
+	r.c.write(MR, 0, false);
+	CHECK((r.c.read(BSR, false) & 0x80) == 0); // end-of-DMA clears with DMA mode
+}
+
+TEST_CASE("ncr5380 irq: monitor-busy interrupt when the target releases BSY")
+{
+	Rig r;
+	r.t.plans.push_back(ScriptedTarget::status());
+	r.connect();
+	r.h.sendCdb({0, 0, 0, 0, 0, 0});
+	r.c.write(MR, 0x04, false); // MONITOR BUSY
+	CHECK((r.c.read(BSR, false) & 0x14) == 0);
+	CHECK(r.h.recvByte() == 0);
+	CHECK((r.c.read(BSR, false) & 0x14) == 0);
+	CHECK(r.h.recvByte() == 0); // COMMAND COMPLETE, bus free
+	CHECK((r.c.read(BSR, false) & 0x14) == 0x14);
+	r.c.read(RESETR, false);
+	CHECK((r.c.read(BSR, false) & 0x14) == 0);
+}
+
+TEST_CASE("ncr5380 irq: bus RST raises IRQ")
+{
+	std::vector<bool> irqs;
+	ScriptedTarget t;
+	Ncr5380::Lines l;
+	l.irq = [&](bool v) { irqs.push_back(v); };
+	Ncr5380 c(l);
+	c.attach(4, &t);
+	c.write(ICR, 0x80, false);
+	CHECK(irqs == std::vector<bool>{true});
+	c.write(ICR, 0, false);
+	c.read(RESETR, false);
+	CHECK(irqs == std::vector<bool>{true, false});
+}
+
+TEST_CASE("ncr5380 lines stay silent in legacy mode")
+{
+	int n = 0;
+	Ncr5380::Lines l;
+	l.irq = [&](bool) { n++; };
+	l.drq = [&](bool) { n++; };
+	Ncr5380 c(l);
+	c.write(ICR, 0x80, false);
+	c.write(MR, 0x02, false);
+	c.write(IDMARX, 0, false);
+	CHECK(n == 0);
+}

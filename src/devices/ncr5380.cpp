@@ -120,7 +120,12 @@ void Ncr5380::legacyCheck()
 
 uint8_t Ncr5380::read(uint8_t reg, bool dack)
 {
-	if (real_) return realRead(reg & 7, dack);
+	if (real_)
+	{
+		const uint8_t v = realRead(reg & 7, dack);
+		syncLines();
+		return v;
+	}
 	return s_[(reg & 7) * 2 + scsiRd];
 }
 
@@ -129,6 +134,7 @@ void Ncr5380::write(uint8_t reg, uint8_t v, bool dack)
 	if (real_)
 	{
 		realWrite(reg & 7, v, dack);
+		syncLines();
 		return;
 	}
 	s_[(reg & 7) * 2 + scsiWr] = v;
@@ -150,7 +156,7 @@ namespace
 {
 constexpr uint8_t kIcrRst = 0x80, kIcrAip = 0x40, kIcrLa = 0x20, kIcrAck = 0x10, kIcrBsy = 0x08,
 				  kIcrSel = 0x04, kIcrAtn = 0x02, kIcrData = 0x01;
-constexpr uint8_t kMrDma = 0x02, kMrArb = 0x01;
+constexpr uint8_t kMrDma = 0x02, kMrArb = 0x01, kMrMonBusy = 0x04;
 constexpr uint8_t kBitIO = 1, kBitCD = 2, kBitMSG = 4;
 } // namespace
 
@@ -173,9 +179,11 @@ void Ncr5380::realReset()
 	aip_ = la_ = false;
 	phase_ = Phase::Free;
 	req_ = ackPending_ = dmaActive_ = false;
+	irq_ = endDma_ = busyErr_ = false;
 	sel_ = -1;
 	for (auto *t : targets_)
 		if (t) t->busReset();
+	syncLines();
 }
 
 void Ncr5380::realBusReset()
@@ -186,6 +194,8 @@ void Ncr5380::realBusReset()
 	req_ = ackPending_ = dmaActive_ = false;
 	sel_ = -1;
 	aip_ = la_ = false;
+	irq_ = true; /* RST on the bus interrupts the initiator */
+	busyErr_ = false;
 	if (lines_.onBusReset) lines_.onBusReset();
 }
 
@@ -220,9 +230,19 @@ bool Ncr5380::dmaRequest() const
 
 void Ncr5380::setPhase(Phase p, bool req)
 {
+	const bool wasBusy = phase_ != Phase::Free;
 	phase_ = p;
 	req_ = req;
-	if (p == Phase::Free) maybeArbitrate();
+	if (p == Phase::Free)
+	{
+		/* BSY dropped.  With MONITOR BUSY set the chip interrupts and ends DMA. */
+		if (wasBusy && (mr_ & kMrMonBusy))
+		{
+			irq_ = busyErr_ = true;
+			dmaActive_ = false;
+		}
+		maybeArbitrate();
+	}
 }
 
 /* Arbitration can only begin once the bus is free; the chip then drives
@@ -419,13 +439,43 @@ uint8_t Ncr5380::realRead(uint8_t reg, bool dack)
 	case 5:
 	{
 		uint8_t v = 0;
+		if (endDma_) v |= 0x80;
 		if (dmaRequest()) v |= 0x40;
+		if (irq_) v |= 0x10;
 		if (phaseMatch()) v |= 0x08;
+		if (busyErr_) v |= 0x04;
 		if (icr_ & kIcrAtn) v |= 0x02;
 		if (icr_ & kIcrAck) v |= 0x01;
 		return v;
 	}
+	case 7: /* reading resets parity / interrupt / busy-error state */
+		irq_ = busyErr_ = false;
+		return 0;
 	default: return 0;
+	}
+}
+
+/* Evaluate DMA phase mismatch, then drive the IRQ/DRQ output lines. */
+void Ncr5380::syncLines()
+{
+	/* A phase mismatch (REQ asserted for a phase other than TCR's) while a
+	   DMA transfer is running ends the DMA and raises an interrupt. */
+	if (dmaActive_ && (mr_ & kMrDma) && req_ && !phaseMatch())
+	{
+		dmaActive_ = false;
+		endDma_ = true;
+		irq_ = true;
+	}
+	const bool drq = dmaRequest();
+	if (irq_ != irqOut_)
+	{
+		irqOut_ = irq_;
+		if (lines_.irq) lines_.irq(irqOut_);
+	}
+	if (drq != drqOut_)
+	{
+		drqOut_ = drq;
+		if (lines_.drq) lines_.drq(drqOut_);
 	}
 }
 
@@ -466,7 +516,7 @@ void Ncr5380::realWrite(uint8_t reg, uint8_t v, bool dack)
 		mr_ = v;
 		if ((v & kMrArb) && !(old & kMrArb)) maybeArbitrate();
 		if (!(v & kMrArb)) aip_ = la_ = false;
-		if (!(v & kMrDma)) dmaActive_ = false;
+		if (!(v & kMrDma)) dmaActive_ = endDma_ = false;
 		checkSelect();
 		break;
 	}
@@ -475,7 +525,11 @@ void Ncr5380::realWrite(uint8_t reg, uint8_t v, bool dack)
 	case 5:
 	case 6:
 	case 7:
-		if (mr_ & kMrDma) dmaActive_ = true;
+		if (mr_ & kMrDma)
+		{
+			dmaActive_ = true;
+			endDma_ = false;
+		}
 		break;
 	}
 }

@@ -25,6 +25,9 @@ public:
 	void attachTarget(int id, std::unique_ptr<scsi::ScsiTarget> target);
 	scsi::ScsiTarget *target(int id) const;
 
+	// Pulse VIA2 CA2 (IRQ) or CB2 (DRQ); Mac II family only.
+	void pulseVia2(bool irq);
+
 private:
 	Ncr5380 bus_;
 	std::array<std::unique_ptr<scsi::ScsiTarget>, 7> targets_;
