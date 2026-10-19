@@ -18,7 +18,7 @@ std::vector<Resource> ParseResourceFork(std::span<const uint8_t> fork)
     uint32_t mapOff = ReadBE32(fork.data() + 4);
 
     // Resource map must fit within the fork
-    if (mapOff + 28 > fork.size()) return result;
+    if (uint64_t(mapOff) + 28 > fork.size()) return result;
 
     const uint8_t *map = fork.data() + mapOff;
     
@@ -28,28 +28,30 @@ std::vector<Resource> ParseResourceFork(std::span<const uint8_t> fork)
     (void)nameListOff; // reserved for future name extraction
 
     // Type list must be within bounds
+    if (uint64_t(mapOff) + typeListOff + 2 > fork.size()) return result;
     const uint8_t *typeList = map + typeListOff;
-    if (typeList + 2 > fork.data() + fork.size()) return result;
 
     // Number of resource types (stored as count-1)
     uint16_t numTypes = ReadBE16(typeList) + 1;
 
     // Iterate through each resource type
     for (uint16_t i = 0; i < numTypes; ++i) {
-        const uint8_t *entry = typeList + 2 + i * 8;
-        if (entry + 8 > fork.data() + fork.size()) break;
+        const size_t entryOff = size_t(mapOff) + typeListOff + 2 + size_t(i) * 8;
+        if (entryOff + 8 > fork.size()) break;
+        const uint8_t *entry = fork.data() + entryOff;
 
         // Type list entry: [type][count-1][refOff]
         uint32_t type = ReadBE32(entry);
         uint16_t numRes = ReadBE16(entry + 4) + 1;
         uint16_t refOff = ReadBE16(entry + 6);
 
-        const uint8_t *refList = typeList + refOff;
+        const size_t refListOff = size_t(mapOff) + typeListOff + refOff;
 
         // Iterate through each resource of this type
         for (uint16_t j = 0; j < numRes; ++j) {
-            const uint8_t *ref = refList + j * 12;
-            if (ref + 12 > fork.data() + fork.size()) break;
+            const size_t refAbs = refListOff + size_t(j) * 12;
+            if (refAbs + 12 > fork.size()) break;
+            const uint8_t *ref = fork.data() + refAbs;
 
             // Resource reference: [id-16][dataOff3-byte][attr]
             int16_t id = static_cast<int16_t>(ReadBE16(ref));
@@ -60,7 +62,7 @@ std::vector<Resource> ParseResourceFork(std::span<const uint8_t> fork)
                                 static_cast<uint32_t>(ref[7]);
 
             // Calculate absolute data offset within data section
-            size_t absDataOff = dataOff + dataOff3;
+            size_t absDataOff = size_t(dataOff) + dataOff3;
             if (absDataOff + 4 > fork.size()) continue;
 
             // Resource data header: 4-byte length

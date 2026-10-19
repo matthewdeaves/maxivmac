@@ -142,7 +142,7 @@ ParsedSidecar ParseSidecar(const std::filesystem::path &sidecarPath)
 		result.entries.push_back(entry);
 
 		// Validate the entry data fits
-		if (entry.offset + entry.length > data.size()) return {};
+		if (uint64_t(entry.offset) + entry.length > data.size()) return {};
 
 		if (entry.id == kEntryIdFinderInfo && entry.length == kFinderInfoSize)
 		{

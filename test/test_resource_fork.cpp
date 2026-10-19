@@ -195,3 +195,35 @@ TEST_CASE("DecodeIcl8 — real data from sidecar")
     }
     CHECK(hasOpaque);
 }
+
+TEST_CASE("ParseResourceFork — map offset near 2^32 does not wrap the bounds check")
+{
+    // mapOff + 28 wraps to 12 in uint32 arithmetic; the map pointer would be ~4 GiB out of range.
+    std::vector<uint8_t> fork(64, 0);
+    fork[4] = 0xFF; fork[5] = 0xFF; fork[6] = 0xFF; fork[7] = 0xF0;
+    CHECK(rsrc::ParseResourceFork(fork).empty());
+}
+
+TEST_CASE("ParseResourceFork — data offset near 2^32 does not wrap")
+{
+    // Valid map at 16 with one type and one resource whose data offset (dataOff + 3-byte offset)
+    // wraps in uint32; it must be skipped, not read.
+    std::vector<uint8_t> fork(16 + 28 + 2 + 8 + 12 + 8, 0);
+    auto be32 = [&](size_t o, uint32_t x) {
+        fork[o] = uint8_t(x >> 24); fork[o + 1] = uint8_t(x >> 16);
+        fork[o + 2] = uint8_t(x >> 8); fork[o + 3] = uint8_t(x);
+    };
+    be32(0, 0xFFFFFFF8u);       // dataOff
+    be32(4, 16);                // mapOff
+    fork[16 + 25] = 28;         // typeListOff = 28 (low byte of BE16 at map+24)
+    size_t tl = 16 + 28;
+    fork[tl + 1] = 0;           // one type
+    be32(tl + 2, 0x49434E23u);  // 'ICN#'
+    fork[tl + 7] = 0;           // one resource
+    fork[tl + 9] = 10;          // refOff = 10 (type list start -> after count + 1 entry)
+    size_t ref = tl + 2 + 8;
+    fork[ref + 5] = 0; fork[ref + 6] = 0; fork[ref + 7] = 0x10;  // dataOff3 = 0x10
+    // 0xFFFFFFF8 + 0x10 wraps to 8 in uint32: would "find" a resource at offset 8.
+    be32(8, 0);
+    CHECK(rsrc::ParseResourceFork(fork).empty());
+}

@@ -474,6 +474,34 @@ TEST_CASE("parseSidecar rejects truncated header")
 	std::filesystem::remove(p);
 }
 
+TEST_CASE("parseSidecar rejects an entry whose offset+length wraps uint32")
+{
+	/* offset 0xFFFFFFF0 + length 0x20 wraps to 0x10, which "fits" a 32-bit check. */
+	auto p = std::filesystem::temp_directory_path() / "._wrap_entry";
+	{
+		std::vector<uint8_t> f(26 + 12 + 64, 0xAB);
+		auto be32 = [&](size_t o, uint32_t x) {
+			f[o] = uint8_t(x >> 24);
+			f[o + 1] = uint8_t(x >> 16);
+			f[o + 2] = uint8_t(x >> 8);
+			f[o + 3] = uint8_t(x);
+		};
+		be32(0, 0x00051607);
+		be32(4, 0x00020000);
+		f[24] = 0;
+		f[25] = 1;
+		be32(26, 2); /* resource fork */
+		be32(30, 0xFFFFFFF0u);
+		be32(34, 0x20);
+		std::ofstream out(p, std::ios::binary);
+		out.write(reinterpret_cast<const char *>(f.data()), static_cast<std::streamsize>(f.size()));
+	}
+	auto sc = detail::ParseSidecar(p);
+	CHECK_FALSE(sc.valid);
+	CHECK(sc.resourceForkData.empty());
+	std::filesystem::remove(p);
+}
+
 TEST_CASE("writeSidecar Finder info only round-trips")
 {
 	auto p = std::filesystem::temp_directory_path() / "._fi_rt";
