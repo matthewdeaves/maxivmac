@@ -1,0 +1,456 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
+# Part of maxivmac (GPL v2, see LICENSE).
+"""In-container driver of the end-to-end ladder (stdlib only; python3 -I).
+
+usage: e2e.py RUNG [RUNG ...]       RUNG is r1 r2 r3 r3b ... (see RUNGS)
+
+One rung is one scripted run of the System 6.0.8 guest in headless maxivmac on a
+virtual LAN (ethhub, with tap0 as the container's own port), plus the checks of
+that rung.  Inputs (read-only mounts): /in/rom/vMac.ROM, /in/disk/*.hfs.
+Output: /out/<rung>/ (summary.json with per-check PASS/FAIL, logs, screenshots,
+the hub pcap, the disk after the run) and exit status 0 only if every rung passed.
+See docs/features/NETWORKING_E2E.md.
+"""
+import glob, gzip, json, os, re, resource, shutil, signal, socket, struct, subprocess, sys, threading, time
+
+ROM = os.environ.get("E2E_ROM", "/in/rom/vMac.ROM")
+DISK_DIR = "/in/disk"
+OUT = os.environ.get("E2E_OUT", "/out")
+WORK = os.environ.get("E2E_WORK", "/work")
+SCRIPTS = "/opt/e2e/net-scripts/ping"
+HUB_PORT = 5555
+DEBUG_PORT = 7356          # PeerTalk's UDP debug broadcast (PT_DEBUG_PORT)
+OUT_CAP = 64 * 1024 * 1024  # total bytes copied to /out per run
+GUEST_MAC = "02:00:00:00:00:20"
+
+# guest: MacTCP manual address; tap: the container's address on the same LAN.
+# peer: POSIX PeerTalk program on the tap address (None = nothing but the kernel).
+RUNGS = {
+    "r1":  dict(guest="10.88.0.20/24", tap="10.88.0.10/24", peer=None, app="ping",
+                what="MacTCP Ping -> container kernel over the hub; container ping -> guest"),
+    "r2":  dict(guest="10.88.0.20/24", tap="10.88.0.10/24", peer="test_mesh", app="test_mesh",
+                what="PeerTalk discovery + one TCP connection + messages, guest 10.88.0.20/24, peer 10.88.0.10/24"),
+    # Both addresses are in 10.0.0.0/8 and differ before the last octet.  Read as
+    # native integers, a little-endian peer ranks 10.0.2.25 above 10.88.0.20 (last
+    # octet 25 > 20) while a big-endian Mac ranks it below (second octet 0 < 88):
+    # the pre-253e821 disagreement.  (10.0.2.15 vs 10.88.0.20 happens to rank the
+    # same way under both readings, so it cannot tell fixed from unfixed.)
+    "r3":  dict(guest="10.88.0.20/8", tap="10.0.2.25/8", peer="test_mesh", app="test_mesh",
+                what="byte-order case: guest 10.88.0.20/8, peer 10.0.2.25/8 (native-int ranks disagree)"),
+    "r3b": dict(guest="10.88.0.20/8", tap="10.0.2.15/8", peer="test_mesh", app="test_mesh",
+                what="byte-order case as first specified: peer 10.0.2.15/8 (ranks agree under both readings)"),
+}
+
+# ---------------------------------------------------------------------------
+
+
+class Run:
+    def __init__(self, name):
+        self.name = name
+        self.cfg = RUNGS[name]
+        self.checks = {}
+        self.timing = {}
+        self.t0 = time.time()
+        self.work = os.path.join(WORK, name)
+        self.shots = os.path.join(self.work, "shots")
+        self.procs = []
+        self.capture = []      # (t, src_ip, text)
+        self.capture_lock = threading.Lock()
+        self.stop = threading.Event()
+        shutil.rmtree(self.work, ignore_errors=True)
+        os.makedirs(self.shots)
+
+    # -- bookkeeping ---------------------------------------------------------
+    def check(self, name, ok, detail=""):
+        self.checks[name] = {"ok": bool(ok), "detail": str(detail)}
+        print("  [%s] %s %s" % ("PASS" if ok else "FAIL", name, detail), flush=True)
+        return ok
+
+    def mark(self, what):
+        self.timing[what] = round(time.time() - self.t0, 1)
+
+    def path(self, n):
+        return os.path.join(self.work, n)
+
+    @property
+    def guest_ip(self):
+        return self.cfg["guest"].split("/")[0]
+
+    @property
+    def tap_ip(self):
+        return self.cfg["tap"].split("/")[0]
+
+    # -- processes -----------------------------------------------------------
+    def spawn(self, argv, outname, env=None, fsize=96 * 1024 * 1024):
+        out = open(self.path(outname), "wb")
+        e = dict(os.environ)
+        e.update(env or {})
+
+        def limits():
+            resource.setrlimit(resource.RLIMIT_FSIZE, (fsize, fsize))
+            os.setsid()
+        p = subprocess.Popen(argv, stdout=out, stderr=subprocess.STDOUT, env=e, preexec_fn=limits)
+        self.procs.append(p)
+        return p
+
+    def terminate(self, p, sig=signal.SIGTERM, wait=10):
+        if p.poll() is None:
+            try:
+                os.killpg(p.pid, sig)
+            except ProcessLookupError:
+                pass
+            try:
+                p.wait(wait)
+            except subprocess.TimeoutExpired:
+                os.killpg(p.pid, signal.SIGKILL)
+                p.wait()
+
+    # -- the UDP debug-broadcast capture (PeerTalk "Remote Test-Log Capture") -
+    def start_capture(self):
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        s.bind(("0.0.0.0", DEBUG_PORT))
+        s.settimeout(0.5)
+        log = open(self.path("capture.log"), "w")
+
+        def loop():
+            while not self.stop.is_set():
+                try:
+                    data, (ip, _) = s.recvfrom(2048)
+                except socket.timeout:
+                    continue
+                except OSError:
+                    break
+                t = time.time() - self.t0
+                text = data.decode("latin-1").rstrip("\r\n")
+                with self.capture_lock:
+                    self.capture.append((t, ip, text))
+                    log.write("%8.2f %s %s\n" % (t, ip, text))
+                    log.flush()
+            log.close()
+            s.close()
+        th = threading.Thread(target=loop, daemon=True)
+        th.start()
+        return th
+
+    # -- the emulator script ----------------------------------------------------
+    def build_script(self):
+        def inc(n):
+            return open(os.path.join(SCRIPTS, n + ".inc")).read()
+        gen = subprocess.run(["python3", "-I", "/opt/e2e/mactcp-config.py", self.cfg["guest"]],
+                             capture_output=True, text=True, check=True).stdout
+        s = ""
+        for b in "boot chooser cpopen ether move restart cpopen mactcp-open".split():
+            s += inc(b)
+        s += gen
+        for b in "mactcp-close restart".split():
+            s += inc(b)
+        # open "Net Tools" (the disk window is open after the restart)
+        folder = ("click 82 105 hold 200ms\nwait for 1s\nclick 82 105 hold 200ms\nwait for 6s\n"
+                  'screenshot "n_folder"\n')
+        if self.cfg["app"] == "ping":
+            s += 'screenshot "E2E_READY"\n# the container pings the guest now\nwait for 25s\n'
+            s += folder
+            s += inc("launch").split('screenshot "n_folder"\n', 1)[1]   # MacTCP Ping (110,105)
+            s += (inc("ping").replace("10.0.2.2", self.tap_ip)
+                  .replace("z1_gw_done", "E2E_PING_DONE"))
+            s += "wait for 5s\n"
+        else:
+            s += folder
+            # test_mesh is the third icon of "Net Tools" (MacTCP Ping, test_chat, test_mesh)
+            s += ('click 240 105 hold 200ms\nwait for 1s\nclick 240 105 hold 200ms\nwait for 12s\n'
+                  'screenshot "E2E_APP_STARTED"\n'
+                  '# every verdict line of the test apps starts with "***"\n'
+                  'wait text "***" %ds\nwait for 2s\nscreenshot "E2E_APP_VERDICT"\nwait for 15s\n'
+                  % self.app_wait())
+        return s
+
+    def app_wait(self):
+        return 600
+
+    # -- the rung ----------------------------------------------------------------
+    def go(self):
+        cfg = self.cfg
+        print("== %s: %s" % (self.name, cfg["what"]), flush=True)
+        # tap0 as the entrypoint made it
+        ip = subprocess.run(["ip", "-4", "-o", "addr", "show", "dev", "tap0"], capture_output=True, text=True).stdout
+        if not self.check("tap0_address", cfg["tap"] in ip, "want %s, have: %s" % (cfg["tap"], ip.strip() or "none")):
+            return
+        caps = dict(l.split(":\t") for l in open("/proc/self/status").read().splitlines() if l.startswith(("Cap", "Uid", "NoNewPrivs")))
+        self.check("unprivileged", caps["Uid"].split()[0] == "2010" and int(caps["CapEff"], 16) == 0 and int(caps["CapPrm"], 16) == 0
+                   and caps["NoNewPrivs"].strip() == "1",
+                   "uid %s, CapPrm %s, CapEff %s, CapBnd %s, NoNewPrivs %s" % (caps["Uid"].split()[0], caps["CapPrm"], caps["CapEff"], caps["CapBnd"], caps["NoNewPrivs"].strip()))
+        disks = sorted(glob.glob(DISK_DIR + "/*.hfs"))
+        if not os.path.isfile(ROM) or not disks:
+            self.check("inputs", False, "ROM %s / disk %s missing" % (ROM, DISK_DIR))
+            return
+        disk = self.path("disk.hfs")
+        subprocess.run(["cp", "--sparse=always", disks[0], disk], check=True)
+
+        # hub with the container's tap as one port, ingress pcap
+        hub = self.spawn(["ethhub", "--listen", "127.0.0.1:%d" % HUB_PORT, "--tap", "tap0",
+                          "--pcap", self.path("lan.pcap")], "hub.out")
+        time.sleep(1.0)
+        if not self.check("hub_up", hub.poll() is None, "ethhub on 127.0.0.1:%d + tap0" % HUB_PORT):
+            return
+        self.mark("hub_up")
+        self.start_capture()
+
+        peer = None
+        if cfg["peer"]:
+            variant = os.environ.get("E2E_PEER", "new")
+            exe = "/opt/peers/%s/%s" % (variant, cfg["peer"])
+            if not os.path.isfile(exe):
+                self.check("peer_binary", False, exe + " missing")
+                return
+            self.peer_variant = variant
+            peer = self.spawn([exe, "--name", "POSIX", "--peers", "0", "--secs", "3600"], "peer.log")
+            self.mark("peer_started")
+
+        script = self.build_script()
+        open(self.path("run.dbg"), "w").write(script)
+        speed = os.environ.get("E2E_SPEED", "")   # "": the emulator's default (--speed=4); see the docs
+        emu = self.spawn(["maxivmac", "--headless", "--silent", "--model=MacPlus", "--rom=" + ROM]
+                         + (["--speed=" + speed] if speed else []) + ["--scsi4=daynaport", "--eth=hub:127.0.0.1:%d" % HUB_PORT,
+                          "--eth-mac=" + GUEST_MAC, "--dbg-script=" + self.path("run.dbg"), disk],
+                         "emulator.out", env={"MAXIVMAC_OUT_DIR": self.shots})
+        self.mark("emulator_started")
+        host_ping = None
+        deadline = time.time() + int(os.environ.get("E2E_RUNG_TIMEOUT", "1500"))
+        while emu.poll() is None and time.time() < deadline:
+            if self.name == "r1" and host_ping is None and os.path.exists(os.path.join(self.shots, "E2E_READY.png")):
+                self.mark("guest_ready")
+                time.sleep(3)
+                host_ping = subprocess.run(["ping", "-c", "5", "-i", "1", "-W", "3", self.guest_ip],
+                                           capture_output=True, text=True)
+                open(self.path("host-ping.txt"), "w").write(host_ping.stdout + host_ping.stderr)
+            time.sleep(0.5)
+        timed_out = emu.poll() is None
+        self.terminate(emu)
+        self.mark("emulator_exit")
+        time.sleep(1)
+        # stop the peer (it prints its report on SIGTERM), then the hub (stats on SIGUSR1 + exit)
+        if peer:
+            self.terminate(peer)
+        os.killpg(hub.pid, signal.SIGUSR1)
+        time.sleep(0.5)
+        self.stop.set()
+        self.terminate(hub)
+        self.mark("done")
+
+        self.check("emulator_script_completed", (not timed_out) and emu.returncode == 0,
+                   "exit %s%s" % (emu.returncode, " (rung timeout)" if timed_out else ""))
+        self.analyse(host_ping)
+        # the disk after the run, for the host-side PT_Log cross-check (hfsutils is not in the image)
+        with open(disk, "rb") as f, gzip.open(self.path("disk-after.hfs.gz"), "wb", 6) as g:
+            shutil.copyfileobj(f, g)
+        os.unlink(disk)
+
+    # -- evidence ------------------------------------------------------------------
+    def analyse(self, host_ping):
+        pk = list(read_pcap(self.path("lan.pcap"))) if os.path.exists(self.path("lan.pcap")) else []
+        frames = [decode(f) for _, f in pk]
+        gmac = bytes.fromhex(GUEST_MAC.replace(":", ""))
+        gip, tip = socket.inet_aton(self.guest_ip), socket.inet_aton(self.tap_ip)
+        self.facts = {"pcap_frames": len(pk), "guest_frames": sum(1 for d in frames if d["src"] == gmac)}
+        self.check("guest_on_hub", self.facts["guest_frames"] > 0,
+                   "%d frames from %s in the pcap" % (self.facts["guest_frames"], GUEST_MAC))
+
+        def icmp(src, dst, typ):
+            return [d for d in frames if d.get("proto") == 1 and d["ip_src"] == src and d["ip_dst"] == dst
+                    and d["icmp_type"] == typ]
+        if self.name == "r1":
+            req, rep = icmp(gip, tip, 8), icmp(tip, gip, 0)
+            self.check("guest_ping_hub", len(req) >= 5 and len(rep) >= 5,
+                       "guest->%s echo requests %d, replies from the container kernel %d" % (self.tap_ip, len(req), len(rep)))
+            self.check("guest_ping_screen", self.screen_text_seen("5/5/0/0"),
+                       "MacTCP Ping window tally 5/5/0/0 (script `wait text`; emulator exit 0)")
+            if host_ping is None:
+                self.check("host_ping_guest", False, "E2E_READY marker never appeared")
+            else:
+                m = re.search(r"(\d+) packets transmitted, (\d+) (?:packets )?received", host_ping.stdout)
+                recv = int(m.group(2)) if m else 0
+                self.check("host_ping_guest", recv == 5, "container `ping %s`: %s" %
+                           (self.guest_ip, m.group(0) if m else host_ping.stdout.strip()[-200:]))
+                hreq, hrep = icmp(tip, gip, 8), icmp(gip, tip, 0)
+                self.check("host_ping_pcap", len(hreq) >= 5 and len(hrep) >= 5,
+                           "pcap: container->guest echo requests %d, guest replies %d" % (len(hreq), len(hrep)))
+            return
+        self.analyse_peertalk(frames, gip, tip)
+
+    def screen_text_seen(self, text):
+        # boot.inc turns `showtext on`: every string the guest draws is echoed on stdout
+        return text in open(self.path("emulator.out"), errors="replace").read()
+
+    def analyse_peertalk(self, frames, gip, tip):
+        ga, ta = self.guest_ip, self.tap_ip
+        peer_log = open(self.path("peer.log"), errors="replace").read()
+        with self.capture_lock:
+            cap = list(self.capture)
+
+        def lines_from(ip):
+            return [t for _, i, t in cap if ("@%s]" % ip) in t]
+        g, p = lines_from(ga), lines_from(ta)
+        # The container's own debug lines are also on stdout (peer.log), in case loopback missed some
+        self.facts.update(guest_lines=len(g), peer_lines=len(p))
+        self.check("udp_capture_guest", len(g) > 0, "%d lines tagged @%s received over the hub on udp/%d" % (len(g), ga, DEBUG_PORT))
+        disc_g = [l for l in g if "[DISC] " in l and "@ %s" % ta in l]
+        self.check("guest_discovers_posix", disc_g, disc_g[0] if disc_g else "no '[DISC] .. @ %s' from the guest" % ta)
+        disc_p = [l for l in (p + peer_log.splitlines()) if "[DISC] " in l and "@ %s" % ga in l]
+        self.check("posix_discovers_guest", disc_p, disc_p[0] if disc_p else "no '[DISC] .. @ %s' from the peer" % ga)
+
+        # TCP: SYN (no ACK) packets between the two addresses = connection attempts
+        syn = [d for d in frames if d.get("proto") == 6 and d["tcp_flags"] & 0x12 == 0x02
+               and {d["ip_src"], d["ip_dst"]} == {gip, tip}]
+        synack = [d for d in frames if d.get("proto") == 6 and d["tcp_flags"] & 0x12 == 0x12
+                  and {d["ip_src"], d["ip_dst"]} == {gip, tip}]
+        tuples = {(d["ip_src"], d["sport"], d["ip_dst"], d["dport"]) for d in syn}
+        initiators = {socket.inet_ntoa(t[0]) for t in tuples}
+        self.facts.update(tcp_syn_segments=len(syn), tcp_connections=len(tuples), tcp_synack=len(synack),
+                          initiators=sorted(initiators))
+        self.check("one_tcp_connection", len(tuples) == 1 and len(synack) >= 1,
+                   "%d distinct SYN 4-tuples (%d segments), %d SYN-ACK; initiator(s): %s"
+                   % (len(tuples), len(syn), len(synack), ",".join(sorted(initiators)) or "none"))
+        # who should dial: the lower address compared as network-order bytes (PT_ShouldInitiate)
+        lower = ga if gip < tip else ta
+        le = lambda b: struct.unpack("<I", b)[0]
+        be = lambda b: struct.unpack(">I", b)[0]
+        self.facts["native_int_rank"] = {
+            "bytewise_lower": lower,
+            "little_endian_peer_thinks_lower": ga if le(gip) < le(tip) else ta,
+            "big_endian_mac_thinks_lower": ga if be(gip) < be(tip) else ta}
+        self.check("initiator_is_designated", initiators == {lower},
+                   "SYN from %s; bytewise-lower address is %s (peer reads it as LE: %s lower, Mac as BE: %s lower)"
+                   % (",".join(sorted(initiators)) or "nobody", lower,
+                      self.facts["native_int_rank"]["little_endian_peer_thinks_lower"],
+                      self.facts["native_int_rank"]["big_endian_mac_thinks_lower"]))
+        # both sides report the connection ([CONN]) and receive heartbeats from the other
+        conn_g = [l for l in g if "[CONN] " in l and "@ %s" % ta in l]
+        conn_p = [l for l in (p + peer_log.splitlines()) if "[CONN] " in l and "@ %s" % ga in l]
+        self.check("both_sides_connected", conn_g and conn_p,
+                   "guest: %s | peer: %s" % (conn_g[0] if conn_g else "none", conn_p[0] if conn_p else "none"))
+
+        def hb(lines, other):
+            best = 0
+            for l in lines:
+                m = re.search(r"HB recv from %s: (\d+)" % re.escape(other), l)
+                if m:
+                    best = max(best, int(m.group(1)))
+            return best
+        hg, hp = hb(g, ta), hb(p + peer_log.splitlines(), ga)
+        self.facts.update(heartbeats_guest_received=hg, heartbeats_peer_received=hp)
+        self.check("message_round_trip", hg >= 1 and hp >= 1,
+                   "heartbeats (PT_Broadcast, PT_RELIABLE over the TCP link): guest received %d from the peer, peer received %d from the guest"
+                   % (hg, hp))
+        live_g = [l for l in g if "LIVE LINK" in l]
+        live_p = [l for l in (p + peer_log.splitlines()) if "LIVE LINK" in l]
+        self.check("guest_verdict_pass", any("*** PASS ***" in l for l in g),
+                   "guest report: %s" % (live_g[0] if live_g else "no LIVE LINK line"))
+        self.check("peer_verdict_pass", any("*** PASS ***" in l for l in peer_log.splitlines()),
+                   "peer report: %s" % (live_p[0] if live_p else "no LIVE LINK line"))
+
+    # -- result ---------------------------------------------------------------------
+    def finish(self):
+        ok = bool(self.checks) and all(c["ok"] for c in self.checks.values())
+        usage = {}
+        for k, f in (("memory_peak_bytes", "/sys/fs/cgroup/memory.peak"), ("pids_peak", "/sys/fs/cgroup/pids.peak")):
+            try:
+                usage[k] = int(open(f).read())
+            except Exception:
+                pass
+        try:
+            for l in open("/sys/fs/cgroup/cpu.stat"):
+                if l.startswith("usage_usec"):
+                    usage["cpu_seconds"] = round(int(l.split()[1]) / 1e6, 1)
+        except Exception:
+            pass
+        summary = {"rung": self.name, "what": self.cfg["what"], "status": "PASS" if ok else "FAIL",
+                   "guest": self.cfg["guest"], "tap": self.cfg["tap"],
+                   "peer": ("%s (%s)" % (self.cfg["peer"], getattr(self, "peer_variant", "?"))) if self.cfg["peer"] else None,
+                   "speed": os.environ.get("E2E_SPEED") or "default", "checks": self.checks,
+                   "facts": getattr(self, "facts", {}), "timing_s": self.timing,
+                   "wall_s": round(time.time() - self.t0, 1), "container_usage": usage}
+        json.dump(summary, open(self.path("summary.json"), "w"), indent=2)
+        copy_out(self.work, OUT if os.environ.get("E2E_FLAT") else os.path.join(OUT, self.name))
+        print("== %s: %s (%.0f s)" % (self.name, summary["status"], summary["wall_s"]), flush=True)
+        return ok
+
+
+# ---------------------------------------------------------------------------
+
+
+def read_pcap(path):
+    data = open(path, "rb").read()
+    if len(data) < 24:
+        return
+    e = "<" if struct.unpack("<I", data[:4])[0] in (0xA1B2C3D4, 0xA1B23C4D) else ">"
+    off = 24
+    while off + 16 <= len(data):
+        s, us, incl, _orig = struct.unpack(e + "IIII", data[off:off + 16])
+        off += 16
+        yield s + us / 1e6, data[off:off + incl]
+        off += incl
+
+
+def decode(f):
+    d = {"dst": f[0:6], "src": f[6:12], "etype": struct.unpack(">H", f[12:14])[0]}
+    if d["etype"] == 0x0800 and len(f) >= 34:
+        ihl = (f[14] & 0x0F) * 4
+        d["proto"] = f[23]
+        d["ip_src"], d["ip_dst"] = f[26:30], f[30:34]
+        l4 = 14 + ihl
+        if d["proto"] == 1 and len(f) > l4:
+            d["icmp_type"] = f[l4]
+        elif d["proto"] == 6 and len(f) >= l4 + 14:
+            d["sport"], d["dport"] = struct.unpack(">HH", f[l4:l4 + 4])
+            d["tcp_flags"] = f[l4 + 13]
+    return d
+
+
+def copy_out(src, dst):
+    os.makedirs(dst, exist_ok=True)
+    total = 0
+    for root, _dirs, files in os.walk(src):
+        for n in sorted(files):
+            p = os.path.join(root, n)
+            rel = os.path.relpath(p, src)
+            size = os.path.getsize(p)
+            if total + size > OUT_CAP:
+                print("output cap reached, skipping %s (%d bytes)" % (rel, size), file=sys.stderr)
+                continue
+            q = os.path.join(dst, rel)
+            os.makedirs(os.path.dirname(q), exist_ok=True)
+            shutil.copyfile(p, q)
+            total += size
+
+
+def main(argv):
+    if len(argv) == 2 and argv[0] == "--tap-ip":      # the entrypoint (root) asks which address tap0 gets
+        print(RUNGS[argv[1]]["tap"])
+        return 0
+    rungs = argv or ["all"]
+    if rungs == ["all"]:      # (the tap address is per rung; test/e2e/run.sh starts one container each)
+        rungs = ["r1", "r2", "r3"]
+    bad = [r for r in rungs if r not in RUNGS]
+    if bad:
+        print("unknown rung(s): %s (have %s)" % (" ".join(bad), " ".join(RUNGS)), file=sys.stderr)
+        return 2
+    results = {}
+    for r in rungs:
+        run = Run(r)
+        try:
+            run.go()
+        except Exception as ex:  # a driver bug is a failure with a reason, never a silent pass
+            run.check("driver", False, "%s: %s" % (type(ex).__name__, ex))
+        finally:
+            for p in run.procs:
+                run.terminate(p, signal.SIGKILL, 5)
+            run.stop.set()
+        results[r] = run.finish()
+    return 0 if all(results.values()) else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

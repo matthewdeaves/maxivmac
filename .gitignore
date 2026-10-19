@@ -42,3 +42,4 @@ data/disks/
 /tools/ethhub/ethhub.dSYM
 __pycache__/
 *.pyc
+/e2e-out
