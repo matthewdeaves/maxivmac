@@ -263,8 +263,8 @@ the disk with hfsutils), screenshots.
   Finder, right after the second restart, `ping` from the container gets "Host
   Unreachable"; once MacTCP Ping (or any MacTCP program) is open it answers.
   R1 therefore pings the guest after the guest's own ping run.
-- `key return` is down for 0.16 ms, which BomberTalk (it polls `GetKeys`) never
-  sees. `key <spec> hold <duration>` was added to the debugger for it.
+- A plain `key return` is down for one tick, which BomberTalk (it polls
+  `GetKeys`) can miss; R4 uses `key return hold 2s` (see SCRIPTING.md).
 - BomberTalk's SDL build only reads `SDL_GetKeyboardState` and starts PeerTalk
   discovery in the lobby, so under the dummy video driver nothing could leave the
   menu; `sdlkeys.c` (LD_PRELOAD) holds Return once. Its `BT_SCREENSHOT` hook
