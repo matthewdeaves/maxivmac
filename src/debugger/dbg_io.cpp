@@ -6,12 +6,14 @@
 
 #include <cstdarg>
 #include <cstdio>
+#include <csignal>
 #include <cstdlib>
 #include <cstring>
 #include <vector>
 
 #ifndef _WIN32
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/un.h>
 #include <unistd.h>
 #endif
@@ -250,12 +252,20 @@ int CreateListenSocket(const std::string &path)
 	}
 	std::strncpy(addr.sun_path, path.c_str(), sizeof(addr.sun_path) - 1);
 
-	if (bind(fd, reinterpret_cast<struct sockaddr *>(&addr), sizeof(addr)) < 0)
+	/* The debugger can write guest memory and mount host paths: only the owner may connect.
+	   (The default path /tmp/maxivmac-dbg-<pid>.sock is in a world-writable directory.) */
+	const mode_t oldMask = umask(0077);
+	const int brc = bind(fd, reinterpret_cast<struct sockaddr *>(&addr), sizeof(addr));
+	umask(oldMask);
+	if (brc < 0)
 	{
 		std::perror("bind");
 		close(fd);
 		return -1;
 	}
+
+	/* A client that disconnects mid-reply must not kill the emulator with SIGPIPE. */
+	std::signal(SIGPIPE, SIG_IGN);
 
 	if (listen(fd, 1) < 0)
 	{
