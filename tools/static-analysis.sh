@@ -23,6 +23,9 @@
 #   CLANG_TIDY RUN_CLANG_TIDY CPPCHECK SHELLCHECK RUFF LIZARD   tool binaries
 #   SA_JOBS          parallelism (default: number of CPUs)
 #   SA_PIN_STRICT=1  fail (exit 2) when a tool version differs from the pin
+#   SA_BASELINE      baseline file to ratchet against / rewrite (default tools/static-analysis.baseline, the pinned-toolchain
+#                    one).  CI containers whose distro tools differ from the pins use their own file
+#                    (tools/static-analysis.baseline.debian13); the Mac gate never reads it.
 #
 # Pinned versions (what the baseline was recorded with; bump together with it):
 PIN_CLANG_TIDY="23"        # major; Homebrew LLVM 23.1.3
@@ -51,7 +54,7 @@ done
 mkdir -p "$OUT"
 OUT="$(cd "$OUT" && pwd)"
 JOBS="${SA_JOBS:-$( (nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4) )}"
-BASELINE="$ROOT/tools/static-analysis.baseline"
+BASELINE="${SA_BASELINE:-$ROOT/tools/static-analysis.baseline}"
 CURRENT="$OUT/metrics.txt"
 : > "$CURRENT"
 FAILED=0

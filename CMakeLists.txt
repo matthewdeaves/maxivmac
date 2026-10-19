@@ -313,7 +313,7 @@ endif()
 # ---------------------------------------------------------------------------
 find_package(PkgConfig QUIET)
 if(PkgConfig_FOUND)
-    pkg_check_modules(SLIRP IMPORTED_TARGET slirp)
+    pkg_check_modules(SLIRP IMPORTED_TARGET slirp>=4.9)   # slirp_stack.cpp needs the 4.9 API (slirp_os_socket); Debian 13 has 4.8
 endif()
 if(SLIRP_FOUND)
     target_sources(maxivmac PRIVATE src/devices/slirp_stack.cpp src/devices/serial_slirp.cpp
@@ -323,7 +323,7 @@ if(SLIRP_FOUND)
     message(STATUS "Networking: enabled (libslirp ${SLIRP_VERSION})")
 else()
     target_compile_definitions(maxivmac PRIVATE "HAVE_SLIRP=0")
-    message(STATUS "Networking: disabled (libslirp not found)")
+    message(STATUS "Networking: disabled (libslirp >= 4.9 not found)")
 endif()
 # --eth=hub:HOST:PORT (UDP to an ethhub; POSIX sockets)
 if(UNIX)
