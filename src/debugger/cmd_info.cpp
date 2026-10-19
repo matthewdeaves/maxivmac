@@ -12,6 +12,8 @@
 #include "core/extn_clip.h"
 #include "core/machine.h"
 #include "core/rig.h"
+#include "core/ict_scheduler.h"
+#include "platform/common/event_queue.h"
 #include "cpu/m68k.h"
 #include "cpu/trap_counter.h"
 
@@ -501,11 +503,27 @@ static void InfoScript(Debugger &dbg)
 		io.write("Active wait conditions: none\n");
 }
 
+/* Pending (future) scripted key events, for debugging unconsumed input. */
+static void InfoKeys(Debugger &dbg)
+{
+	auto pending = EventQ_PendingKeys();
+	if (pending.empty())
+	{
+		dbg.io().write("No pending key events\n");
+		return;
+	}
+	ScaledCycleCount now = g_ict.getCurrent();
+	for (const auto &e : pending)
+		dbg.io().write("  at %" PRIu64 " (+%" PRIu64 " units)  key $%02X %s\n", e.fireCycle,
+					   e.fireCycle > now ? e.fireCycle - now : 0, e.u.press.key,
+					   e.u.press.down ? "down" : "up");
+}
+
 void CmdInfo(Debugger &dbg, const std::vector<Token> &args)
 {
 	if (args.empty() || args[0].isEnd())
 	{
-		dbg.io().write("Usage: info <break|reg|trace|traps|globals|types|symbol|insn|script>\n");
+		dbg.io().write("Usage: info <break|reg|trace|traps|globals|types|symbol|insn|script|keys>\n");
 		return;
 	}
 
@@ -534,10 +552,12 @@ void CmdInfo(Debugger &dbg, const std::vector<Token> &args)
 		InfoConsole(dbg, args);
 	else if (sub == "script")
 		InfoScript(dbg);
+	else if (sub == "keys")
+		InfoKeys(dbg);
 	else
 		dbg.io().write("Unknown info sub-command '%s'.\n"
 					   "  Available: break, reg, trace, traps, globals, types, symbol, insn, via, "
-					   "scrap, console, script\n",
+					   "scrap, console, script, keys\n",
 					   sub.c_str());
 }
 

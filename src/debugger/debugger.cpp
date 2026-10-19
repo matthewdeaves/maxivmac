@@ -65,6 +65,10 @@ void CmdScreenshot(Debugger &dbg, const std::vector<Token> &args);
 void CmdWait(Debugger &dbg, const std::vector<Token> &args);
 void CmdFail(Debugger &dbg, const std::vector<Token> &args);
 void CmdTimeout(Debugger &dbg, const std::vector<Token> &args);
+void CmdDrag(Debugger &dbg, const std::vector<Token> &args);
+void CmdMove(Debugger &dbg, const std::vector<Token> &args);
+void CmdMouseDown(Debugger &dbg, const std::vector<Token> &args);
+void CmdMouseUp(Debugger &dbg, const std::vector<Token> &args);
 void CmdType(Debugger &dbg, const std::vector<Token> &args);
 void CmdKey(Debugger &dbg, const std::vector<Token> &args);
 void CmdClearKeys(Debugger &dbg, const std::vector<Token> &args);
@@ -167,7 +171,7 @@ static CmdEntry s_commands[] = {
 	 "  diag all on/off — toggle everything.\n",
 	 "Tracing"},
 	{"info", "i", CmdInfo, "Show info about debugger state",
-	 "info <break|reg|traps|globals|symbol|insn|via|scrap|console>\n  Show various debugger "
+	 "info <break|reg|traps|globals|symbol|insn|via|scrap|console|script|keys>\n  Show various debugger "
 	 "information.\n",
 	 "Information"},
 	{"log", "", CmdLog, "Show guest log / log to file",
@@ -239,8 +243,24 @@ static CmdEntry s_commands[] = {
 	 "shutdown\n  Queue a shutdown command for the SharedDrive INIT.\n",
 	 "Guest"},
 	{"click", "", CmdClick, "Click at coords or dialog button",
-	 "click button \"title\"\n  Click a dialog button by title.\nclick <x> <y>\n  Click at screen "
-	 "coordinates.\n",
+	 "click button \"title\"\n  Click a dialog button by title.\n"
+	 "click <x> <y>\n  Quick click at screen coordinates (button held ~4 ticks).\n"
+	 "click <x> <y> hold <duration>\n  Press, hold for <duration> (min 5 ticks), release.\n"
+	 "click <x1> <y1> <x2> <y2> [hold <duration>]\n  Same as drag.\n"
+	 "  Gestures are queued; use 'wait for' to let them play out.\n",
+	 "Guest"},
+	{"drag", "", CmdDrag, "Press, glide, release",
+	 "drag <x1> <y1> <x2> <y2> [hold <duration>]\n  Press at (x1,y1), glide to (x2,y2) in 10 steps\n"
+	 "  (1 s total), dwell <duration> (default 300ms), release. For pull-down menus.\n",
+	 "Guest"},
+	{"move", "", CmdMove, "Move the pointer",
+	 "move <x> <y>\n  Move the emulated pointer.\n",
+	 "Guest"},
+	{"mousedown", "", CmdMouseDown, "Press the mouse button",
+	 "mousedown [<x> <y>]\n  Press the button, optionally after moving to (x,y).\n",
+	 "Guest"},
+	{"mouseup", "", CmdMouseUp, "Release the mouse button",
+	 "mouseup\n  Release the button. Queued after earlier mouse gestures.\n",
 	 "Guest"},
 	{"dialog", "", CmdDialog, "Dump front dialog structure",
 	 "dialog\n  Show all items in the front dialog window.\n",

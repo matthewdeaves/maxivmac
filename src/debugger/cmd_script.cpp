@@ -7,6 +7,7 @@
 #include "debugger/script_keymap.h"
 #include "debugger/settings.h"
 #include "debugger/duration.h"
+#include "debugger/script_mouse.h"
 
 #include "core/machine.h"
 #include "core/ict_scheduler.h"
@@ -17,6 +18,7 @@
 #include "platform/common/event_queue.h"
 #include "util/macroman.h"
 
+#include <algorithm>
 #include <cinttypes>
 #include <cstdlib>
 
@@ -397,12 +399,84 @@ void CmdShutdown(Debugger &, const std::vector<Token> &)
 	ExtFS_QueueGuestCmd(3);
 }
 
+/* ── Mouse ─────────────────────────────────────────── */
+
+/* Units in one 60 Hz tick: the mouse device consumes one event per tick. */
+static ScaledCycleCount ScriptUnitsPerTick()
+{
+	int mult = g_rig ? g_rig->config().clockMult : 1;
+	return 130240ull * static_cast<ScaledCycleCount>(mult) * kCycleScale;
+}
+
+/* When the last scripted mouse gesture finishes.  New gestures start after
+   it so they cannot overtake gestures that are still queued. */
+static ScaledCycleCount s_mouseTail = 0;
+
+static void QueueMousePlan(const std::vector<MouseStep> &plan)
+{
+	ScaledCycleCount base = std::max(g_ict.getCurrent(), s_mouseTail);
+	for (const auto &st : plan)
+	{
+		if (st.kind == EvtQElKind::MousePos)
+			EventQ_Push({base + st.dt, EvtQElKind::MousePos, {.pos = {st.h, st.v}}});
+		else
+			EventQ_Push({base + st.dt, EvtQElKind::MouseButton, {.press = {0, st.down}}});
+	}
+	s_mouseTail = base + PlanDuration(plan, ScriptUnitsPerTick());
+}
+
+/* Parse "x y" at args[idx]; true if both are numbers. */
+static bool ParsePoint(const std::vector<Token> &args, size_t idx, int16_t &h, int16_t &v)
+{
+	if (idx + 1 >= args.size() || !args[idx].isNumber() || !args[idx + 1].isNumber()) return false;
+	h = static_cast<int16_t>(args[idx].numValue);
+	v = static_cast<int16_t>(args[idx + 1].numValue);
+	return true;
+}
+
+/* Parse an optional trailing "hold <duration>" at args[idx]. */
+static bool ParseHold(Debugger &dbg, const std::vector<Token> &args, size_t idx, bool &given,
+					  ScaledCycleCount &hold)
+{
+	given = false;
+	if (idx >= args.size() || args[idx].isEnd()) return true;
+	size_t used;
+	uint64_t v;
+	if (!args[idx].isWord("hold") ||
+		!ParseDurationTokens(args, idx + 1, ScriptUnitsPerSecond(), v, used) ||
+		(idx + 1 + used < args.size() && !args[idx + 1 + used].isEnd()))
+	{
+		ScriptError(dbg, "Error: expected 'hold <duration>' (e.g. hold 500ms)");
+		return false;
+	}
+	given = true;
+	hold = v;
+	return true;
+}
+
+static void ClickUsage(Debugger &dbg)
+{
+	ScriptError(dbg,
+				"Usage: click button \"title\"\n"
+				"       click <x> <y> [hold <duration>]\n"
+				"       click <x1> <y1> <x2> <y2> [hold <duration>]   (same as drag)");
+}
+
+static void DoDrag(Debugger &dbg, int16_t h1, int16_t v1, int16_t h2, int16_t v2, bool holdGiven,
+				   ScaledCycleCount hold)
+{
+	const ScaledCycleCount hz = ScriptUnitsPerSecond();
+	/* 10 steps, 0.1 s apart; dwell 0.3 s at the destination unless given */
+	QueueMousePlan(PlanDrag(h1, v1, h2, v2, hz / 10, holdGiven ? hold : hz * 3 / 10,
+							ScriptUnitsPerTick()));
+	dbg.io().write("drag (%d,%d) -> (%d,%d)\n", h1, v1, h2, v2);
+}
+
 void CmdClick(Debugger &dbg, const std::vector<Token> &args)
 {
 	if (args.empty() || args[0].isEnd())
 	{
-		dbg.io().write("Usage: click button \"title\"\n");
-		dbg.io().write("       click <x> <y>\n");
+		ClickUsage(dbg);
 		return;
 	}
 
@@ -412,19 +486,19 @@ void CmdClick(Debugger &dbg, const std::vector<Token> &args)
 	{
 		if (args.size() < 2 || args[1].isEnd())
 		{
-			dbg.io().write("Usage: click button \"title\"\n");
+			ClickUsage(dbg);
 			return;
 		}
 		auto dlg = guest::readFrontDialog();
 		if (!dlg)
 		{
-			dbg.io().write("Error: front window is not a dialog\n");
+			ScriptError(dbg, "Error: front window is not a dialog");
 			return;
 		}
 		auto *btn = guest::findButton(*dlg, args[1].text);
 		if (!btn)
 		{
-			dbg.io().write("Error: no button matching \"%s\"\n", args[1].text.c_str());
+			ScriptError(dbg, ("Error: no button matching \"" + args[1].text + "\"").c_str());
 			return;
 		}
 		auto pt = guest::itemCenter(*dlg, *btn);
@@ -432,24 +506,95 @@ void CmdClick(Debugger &dbg, const std::vector<Token> &args)
 		clickV = pt.v;
 		dbg.io().write("click button \"%s\" at (%d,%d)\n", btn->text.c_str(), clickH, clickV);
 	}
-	else if (args[0].isNumber() && args.size() >= 2 && args[1].isNumber())
+	else if (ParsePoint(args, 0, clickH, clickV))
 	{
-		clickH = static_cast<int16_t>(args[0].numValue);
-		clickV = static_cast<int16_t>(args[1].numValue);
+		int16_t h2, v2;
+		bool holdGiven = false;
+		ScaledCycleCount hold = 0;
+		if (ParsePoint(args, 2, h2, v2))
+		{
+			if (!ParseHold(dbg, args, 4, holdGiven, hold)) return;
+			DoDrag(dbg, clickH, clickV, h2, v2, holdGiven, hold);
+			return;
+		}
+		if (!ParseHold(dbg, args, 2, holdGiven, hold)) return;
+		if (holdGiven)
+		{
+			QueueMousePlan(PlanClick(clickH, clickV, hold, ScriptUnitsPerTick()));
+			dbg.io().write("click at (%d,%d) hold %.3f s\n", clickH, clickV,
+						   static_cast<double>(hold) / static_cast<double>(ScriptUnitsPerSecond()));
+			return;
+		}
 		dbg.io().write("click at (%d,%d)\n", clickH, clickV);
 	}
 	else
 	{
-		dbg.io().write("Usage: click button \"title\"\n");
-		dbg.io().write("       click <x> <y>\n");
+		ClickUsage(dbg);
 		return;
 	}
 
-	// Inject mouse position + button down/up
-	ScaledCycleCount t = g_ict.getCurrent();
+	/* Plain click: position, then a button press/release pair.  The mouse
+	   device holds the button for at least 4 ticks (see script_mouse.h);
+	   use `click ... hold <duration>` or `drag` for menus. */
+	ScaledCycleCount t = std::max(g_ict.getCurrent(), s_mouseTail);
 	EventQ_Push({t, EvtQElKind::MousePos, {.pos = {clickH, clickV}}});
 	EventQ_Push({t + 40000, EvtQElKind::MouseButton, {.press = {0, true}}});
 	EventQ_Push({t + 120000, EvtQElKind::MouseButton, {.press = {0, false}}});
+	s_mouseTail = t + 120000 + (kMouseButtonLockTicks + 1) * ScriptUnitsPerTick();
+}
+
+void CmdDrag(Debugger &dbg, const std::vector<Token> &args)
+{
+	int16_t h1, v1, h2, v2;
+	if (!ParsePoint(args, 0, h1, v1) || !ParsePoint(args, 2, h2, v2))
+	{
+		ScriptError(dbg, "Usage: drag <x1> <y1> <x2> <y2> [hold <duration>]");
+		return;
+	}
+	bool holdGiven = false;
+	ScaledCycleCount hold = 0;
+	if (!ParseHold(dbg, args, 4, holdGiven, hold)) return;
+	DoDrag(dbg, h1, v1, h2, v2, holdGiven, hold);
+}
+
+void CmdMove(Debugger &dbg, const std::vector<Token> &args)
+{
+	int16_t h, v;
+	if (!ParsePoint(args, 0, h, v))
+	{
+		ScriptError(dbg, "Usage: move <x> <y>");
+		return;
+	}
+	QueueMousePlan(PlanMove(h, v));
+	dbg.io().write("move to (%d,%d)\n", h, v);
+}
+
+void CmdMouseDown(Debugger &dbg, const std::vector<Token> &args)
+{
+	int16_t h, v;
+	if (args.size() > 1 && !args[0].isEnd())
+	{
+		if (!ParsePoint(args, 0, h, v))
+		{
+			ScriptError(dbg, "Usage: mousedown [<x> <y>]");
+			return;
+		}
+		ScaledCycleCount tick = ScriptUnitsPerTick();
+		auto plan = PlanMove(h, v);
+		auto press = PlanButton(true, tick);
+		plan.insert(plan.end(), press.begin(), press.end());
+		QueueMousePlan(plan);
+		dbg.io().write("mousedown at (%d,%d)\n", h, v);
+		return;
+	}
+	QueueMousePlan(PlanButton(true, ScriptUnitsPerTick()));
+	dbg.io().write("mousedown\n");
+}
+
+void CmdMouseUp(Debugger &dbg, const std::vector<Token> &)
+{
+	QueueMousePlan(PlanButton(false, ScriptUnitsPerTick()));
+	dbg.io().write("mouseup\n");
 }
 
 static const char *itemTypeName(guest::DialogItemType t)
