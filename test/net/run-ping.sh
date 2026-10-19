@@ -19,6 +19,7 @@
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 [ $# -ge 1 ] && EMU="$1"
+export MAXIVMAC="$EMU" # for prep-disk.sh
 check_common
 need_tool hls; need_tool hmount; need_tool humount
 if [ ! -f "$NET_DISK" ]; then
