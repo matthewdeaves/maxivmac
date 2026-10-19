@@ -5,6 +5,7 @@ on:
     branches: [master]
   pull_request:
     branches: [master]
+  workflow_dispatch:
 
 env:
   # Override these via GitHub repository/environment Variables (Settings -> Secrets and variables -> Actions).
