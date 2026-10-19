@@ -4,6 +4,7 @@
 #include "storage/drive_manager.h"
 #include "storage/icon_builder.h"
 #include "core/diag.h"
+#include "util/data_path.h"
 #include "platform/common/path_utils.h"
 
 #include <algorithm>
@@ -59,8 +60,8 @@ int DriveManager::mount(const std::filesystem::path &hostDir)
 			auto col = perVol / "icon-color.png";
 			if (!fs::is_regular_file(bw) || !fs::is_regular_file(col))
 			{
-				bw = "data/defaults/floppy-bw.png";
-				col = "data/defaults/floppy-color.png";
+				bw = ResolveDataPath("data/defaults/floppy-bw.png");
+				col = ResolveDataPath("data/defaults/floppy-color.png");
 			}
 			printf("[VIcon] loading: %s + %s\n", path_str(bw).c_str(), path_str(col).c_str());
 			auto fork = BuildIconResourceFork(bw, col);

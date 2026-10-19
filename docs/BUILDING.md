@@ -48,6 +48,16 @@ The emulator requires a ROM file and at least one disk image:
 
 ROM auto-detection searches `./`, `roms/`, and `--romdir` for `<MODEL>.ROM`.
 
+### Data files
+
+Definition files under `data/` (`data/debug/traps.def`, `types.def`,
+`globals.def`, `errors.def`, `typemap.def`, `data/roms/`) are found
+relative to the current directory first, then via `$MAXIVMAC_ROOT`, the
+executable's location (`<exe>/../..`), and finally the source tree the
+binary was built from.  Scripted runs can therefore start from any
+directory.  If `traps.def` cannot be found the emulator prints a warning
+(without it trap names and `wait text` do not work).
+
 ### Command-Line Options
 
 | Flag | Description |

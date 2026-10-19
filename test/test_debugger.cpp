@@ -865,3 +865,40 @@ TEST_CASE("hyphenated setting names are rejoined")
 	CHECK(JoinHyphenatedName(toks, n).empty());
 	CHECK(n == 0);
 }
+
+/* ════════════════════════════════════════════════════════
+   Data file resolution (independent of the current directory)
+   ════════════════════════════════════════════════════════ */
+
+#include "util/data_path.h"
+#include <filesystem>
+
+TEST_CASE("data path candidates are ordered cwd, env, exe, source")
+{
+	auto c = DataPathCandidates("data/debug/traps.def", "/env", "/a/bld/macos", "/src");
+	REQUIRE(c.size() == 6);
+	CHECK(c[0] == "data/debug/traps.def");
+	CHECK(c[1] == "/env/data/debug/traps.def");
+	CHECK(c[2] == "/a/data/debug/traps.def");
+	CHECK(c[3] == "/a/bld/data/debug/traps.def");
+	CHECK(c[4] == "/a/bld/macos/data/debug/traps.def");
+	CHECK(c[5] == "/src/data/debug/traps.def");
+
+	auto d = DataPathCandidates("x", "", "", "");
+	REQUIRE(d.size() == 1);
+	CHECK(d[0] == "x");
+}
+
+TEST_CASE("data path resolves traps.def from an unrelated working directory")
+{
+	namespace fs = std::filesystem;
+	auto saved = fs::current_path();
+	fs::current_path(fs::temp_directory_path());
+	std::string p = ResolveDataPath("data/debug/traps.def");
+	bool exists = fs::is_regular_file(p);
+	fs::current_path(saved);
+	CHECK(exists);
+
+	/* a missing file comes back unchanged for the caller's own error path */
+	CHECK(ResolveDataPath("data/debug/no-such-file.def") == "data/debug/no-such-file.def");
+}

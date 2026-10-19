@@ -7,6 +7,7 @@
 #include "core/config_loader.h"
 #include "core/model_defs.h"
 #include "core/diag.h"
+#include "util/data_path.h"
 #include "config/mac_file.h"
 #include <algorithm>
 #include <cassert>
@@ -633,6 +634,8 @@ std::string ResolveRomPath(const std::string &romPath, MacModel model, const std
 
 	// Try data/roms/<name> (new primary path)
 	p = std::string("data/roms/") + name;
+	if (fileExists(p)) return p;
+	p = ResolveDataPath(std::string("data/roms/") + name);
 	if (fileExists(p)) return p;
 
 	// Try roms/<name> (legacy fallback)

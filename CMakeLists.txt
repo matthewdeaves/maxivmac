@@ -59,6 +59,7 @@ set(MINIVMAC_SOURCES
 
     # Utility
     src/util/macroman.cpp
+    src/util/data_path.cpp
 
     # Storage
     src/storage/appledouble.cpp
@@ -234,6 +235,10 @@ target_compile_definitions(maxivmac PRIVATE
     "HAVE_SDL=1"
 )
 
+# Last-resort data/ lookup for binaries built out of tree (see util/data_path.h)
+set_source_files_properties(src/util/data_path.cpp PROPERTIES
+    COMPILE_DEFINITIONS "MAXIVMAC_SOURCE_DIR=\"${CMAKE_SOURCE_DIR}\"")
+
 # Compiler flags matching the original Xcode project
 target_compile_options(maxivmac PRIVATE
     -Wall
@@ -395,6 +400,7 @@ add_executable(tests
     src/lang/type_registry.cpp
     src/lang/global_registry.cpp
     src/util/macroman.cpp
+    src/util/data_path.cpp
     tools/icon_extract/resource_fork.cpp
     tools/icon_extract/icon_decode.cpp
     test/test_drive_manager.cpp
