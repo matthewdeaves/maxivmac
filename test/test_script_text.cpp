@@ -7,6 +7,8 @@
 #include "debugger/cmd_parser.h"
 #include "debugger/script_cond.h"
 
+#include <algorithm>
+
 TEST_CASE("text history: find returns the newest match not older than 'since'")
 {
 	TextHistory h;
@@ -123,4 +125,13 @@ TEST_CASE("on: only commands that do not resume the guest may run in a handler")
 	CHECK_FALSE(ReactiveCommandAllowed("expect"));
 	CHECK_FALSE(ReactiveCommandAllowed("source"));
 	CHECK_FALSE(ReactiveCommandAllowed("if"));
+}
+
+TEST_CASE("text history: control characters are escaped so each string is one line")
+{
+	TextHistory h;
+	h.push(1000, "timeout  9\r2\n3\t4", "DrawText");
+	auto s = FormatTextHistory(h, 5, 1000);
+	CHECK(s.find("\"timeout  9\\r2\\n3\\t4\"\n") != std::string::npos);
+	CHECK(std::count(s.begin(), s.end(), '\n') == 2); // header + one record
 }

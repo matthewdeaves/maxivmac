@@ -99,6 +99,8 @@ the branch that found them.
   `quoted` flag on tokenizer tokens. Tests: `expect_ok.dbg`,
   `expect_fail.dbg`, `fail_context.dbg`, `must_timeout.dbg` in
   `test/run_script_tests.sh`; `test/test_script_text.cpp` for the formatter.
+  Control characters in listed text are escaped (`\r`, `\n`, `\t`) so each
+  string is one line (the MacTCP Ping window draws rows ending in a CR).
 
 ### S8. No way to branch, or to handle an optional dialog
 

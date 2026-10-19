@@ -42,7 +42,17 @@ std::string FormatTextHistory(const TextHistory &h, size_t n, uint64_t unitsPerS
 		out += buf;
 		out += r->trap;
 		out += " \"";
-		out += r->text;
+		for (char c : r->text) // one line per string, whatever the guest drew
+		{
+			if (c == '\n')
+				out += "\\n";
+			else if (c == '\r')
+				out += "\\r";
+			else if (c == '\t')
+				out += "\\t";
+			else
+				out += c;
+		}
 		out += "\"\n";
 	}
 	return out;
