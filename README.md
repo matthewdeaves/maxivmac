@@ -254,6 +254,10 @@ See [docs/BUILDING.md](docs/BUILDING.md) for dependencies and advanced options.
 maxivmac is released under the **GNU General Public License v2** (inherited
 from Mini vMac).
 
+- **Mikhail Kandel** — the DaynaPORT SCSI/Link command set
+  (`src/devices/scsi_daynaport.*`) is derived from his
+  [Mini vMac fork](https://github.com/MikhailKandel/minivmac) (GPL-2.0-only,
+  like the rest of the tree)
 - **Mini vMac** — original emulator core by [Paul C. Pratt](https://www.gryphel.com/)
 - **vMac** — the project Mini vMac grew from
 - **UAE** — 68K CPU emulator lineage

@@ -27,4 +27,6 @@ Weston Pawlowski       — SCC serial device (src/devices/scc.cpp)
 Michael Fort           — SCC LocalTalk networking additions (src/devices/scc.cpp)
 John R. Hauser         — SoftFloat IEC/IEEE floating-point library (src/cpu/fpu_math.h)
 Stanislav Shwartsman   — SoftFloat extensions for Bochs (src/cpu/fpu_math.h)
+Mikhail Kandel         — DaynaPORT SCSI/Link command set and tests, from his Mini vMac
+                         fork (src/devices/scsi_daynaport.*; GPL-2.0-only)
 Bradford L. Barrett    — jdate() function from Webalizer (src/platform/common/date_to_sec.h)
