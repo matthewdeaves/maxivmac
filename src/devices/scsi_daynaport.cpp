@@ -250,6 +250,18 @@ scsi::Step DaynaPortTarget::handle(uint8_t lun)
 // Called after each complete DATA OUT record, not just at command end.
 scsi::Step DaynaPortTarget::dataOutDone()
 {
+	const size_t n = length_;
+	const std::string head = hex(std::span<const uint8_t>(buf_.data(), std::min<size_t>(n, 24)));
+	scsi::Step s = handleDataOut();
+	SCSI_LOG("dayna:   DATA-OUT record %zu bytes [%s%s] -> %s len %zu status %u", n, head.c_str(),
+			 n > 24 ? " ..." : "",
+			 s.kind == scsi::Step::DataIn ? "DATA-IN" : s.kind == scsi::Step::DataOut ? "DATA-OUT" : "STATUS",
+			 s.kind == scsi::Step::DataOut ? s.out.size() : 0, unsigned(s.status));
+	return s;
+}
+
+scsi::Step DaynaPortTarget::handleDataOut()
+{
 	if (cdb_[0] == kSetMode)
 	{
 		std::copy_n(buf_.begin(), 6, mac_.begin());
