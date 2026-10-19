@@ -678,8 +678,10 @@ fail against the old hub) and `test/test_eth_hub.cpp`.
   everything is in clear) or spoof a registered client's source address;
   one shared secret, no revocation; HMAC verification cost per 13-byte datagram.
   Per-datagram MACs, counters and nonces were left out on purpose.
+- **Verified:** `ctest` (also under the ASan/UBSan preset), the Python tests,
+  and the containerised e2e rung R1 (guest MacTCP ping through the hub and the
+  container's tap) with a plain hub and with `E2E_HUB_KEY=1` (hub `--key-file`,
+  emulator `,key=FILE`): both PASS, the keyed hub logs "authentication on" and
+  `dropped_unauth=0`. R2/R3 were not run.
 - **Not verified:** a hub and an emulator on two machines with skewed clocks;
-  QEMU; an emulator + guest end to end through a keyed hub is covered only by
-  the `eth_hub_ethhub` ctest (three EthHub backends), see the notes in the
-  commit for the e2e run.
-
+  QEMU; a rate-limited or MAC-pinned guest under real load.
