@@ -382,7 +382,7 @@ private:
 	std::vector<CatalogEntry> catalog_;	   // flat list; searched linearly by CNID or name
 	uint8_t rootDirFinderInfo_[32] = {};   // DInfo(16) + DXInfo(16) for root dir
 	std::vector<uint8_t> virtualIconFork_; // resource fork for virtual Icon\r
-	[[maybe_unused]] SidecarMode sidecarMode_ = SidecarMode::Full;
+	SidecarMode sidecarMode_ = SidecarMode::Full;
 	appledouble::TypeMap typeMap_; // per-volume extension→type mapping
 	CnidTable cnidTable_;		   // CNID identity table — maps (parentDirID, macName) ↔ CNID
 
